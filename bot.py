@@ -252,7 +252,6 @@ async def handle_ntfy_post(request):
     return web.json_response({"id": "ntfy-compat", "time": int(time.time()), "event": "message", "topic": topic, "message": message})
 
 async def handle_index(request):
-    logger.info(f"handle_index: dc_bot_instance={dc_bot_instance is not None}")
     html = """<!DOCTYPE html>
 <html>
 <head>
@@ -342,20 +341,18 @@ async def handle_index(request):
     if dc_bot_instance:
         try:
             accounts = dc_bot_instance.rpc.get_all_account_ids()
-            logger.info(f"handle_index: accounts={accounts}")
             active_accid = None
             for aid in accounts:
                 try:
-                    conf = dc_bot_instance.rpc.get_config(aid, "configured")
-                    logger.info(f"handle_index: account {aid} configured={conf}")
-                    if conf == "1":
+                    if dc_bot_instance.rpc.get_config(aid, "configured") == "1":
                         active_accid = aid
                         break
-                except Exception as e:
-                    logger.error(f"handle_index: error checking account {aid}: {e}")
+                except:
+                    pass
             
             if active_accid:
-                qrdata = dc_bot_instance.rpc.get_config(active_accid, "qr")
+                # Use the dedicated method to get the secure join link
+                qrdata = dc_bot_instance.rpc.get_chat_securejoin_qr_code(active_accid, None)
                 if qrdata:
                     html += f"""
         <p><strong>Add this bot to Delta Chat:</strong><br>
@@ -368,10 +365,8 @@ async def handle_index(request):
                         f = io.StringIO()
                         qr.print_ascii(out=f)
                         html += f'<div class="qr-wrapper"><pre class="qr-code">{f.getvalue()}</pre></div>'
-            else:
-                logger.warning("handle_index: no active account found")
         except Exception as e:
-            logger.error(f"handle_index: error in bot block: {e}")
+            logger.error(f"handle_index: error rendering bot block: {e}")
             html += f"<!-- Error: {e} -->"
             
     html += """
