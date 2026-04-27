@@ -252,6 +252,7 @@ async def handle_ntfy_post(request):
     return web.json_response({"id": "ntfy-compat", "time": int(time.time()), "event": "message", "topic": topic, "message": message})
 
 async def handle_index(request):
+    logger.info(f"handle_index: dc_bot_instance={dc_bot_instance is not None}")
     html = """<!DOCTYPE html>
 <html>
 <head>
@@ -339,17 +340,21 @@ async def handle_index(request):
 """
     
     if dc_bot_instance:
-        active_accid = None
-        for aid in dc_bot_instance.rpc.get_all_account_ids():
-            try:
-                if dc_bot_instance.rpc.get_config(aid, "configured") == "1":
-                    active_accid = aid
-                    break
-            except:
-                pass
-                
-        if active_accid:
-            try:
+        try:
+            accounts = dc_bot_instance.rpc.get_all_account_ids()
+            logger.info(f"handle_index: accounts={accounts}")
+            active_accid = None
+            for aid in accounts:
+                try:
+                    conf = dc_bot_instance.rpc.get_config(aid, "configured")
+                    logger.info(f"handle_index: account {aid} configured={conf}")
+                    if conf == "1":
+                        active_accid = aid
+                        break
+                except Exception as e:
+                    logger.error(f"handle_index: error checking account {aid}: {e}")
+            
+            if active_accid:
                 qrdata = dc_bot_instance.rpc.get_config(active_accid, "qr")
                 if qrdata:
                     html += f"""
@@ -363,8 +368,11 @@ async def handle_index(request):
                         f = io.StringIO()
                         qr.print_ascii(out=f)
                         html += f'<div class="qr-wrapper"><pre class="qr-code">{f.getvalue()}</pre></div>'
-            except Exception as e:
-                html += f"<!-- Error getting QR: {e} -->"
+            else:
+                logger.warning("handle_index: no active account found")
+        except Exception as e:
+            logger.error(f"handle_index: error in bot block: {e}")
+            html += f"<!-- Error: {e} -->"
             
     html += """
     </div>
