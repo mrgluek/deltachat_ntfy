@@ -319,23 +319,33 @@ async def handle_index(request):
         <p>This server is running the Delta Chat Ntfy Bot. Send POST requests to <code>/{topic}</code> to broadcast notifications.</p>
 """
     
-    if dc_bot_instance and dc_accid is not None:
-        try:
-            qrdata = dc_bot_instance.rpc.get_config(dc_accid, "qr")
-            if qrdata:
-                html += f"""
+    if dc_bot_instance:
+        active_accid = None
+        for aid in dc_bot_instance.rpc.get_all_account_ids():
+            try:
+                if dc_bot_instance.rpc.get_config(aid, "configured") == "1":
+                    active_accid = aid
+                    break
+            except:
+                pass
+                
+        if active_accid:
+            try:
+                qrdata = dc_bot_instance.rpc.get_config(active_accid, "qr")
+                if qrdata:
+                    html += f"""
         <p><strong>Add this bot to Delta Chat:</strong><br>
         <a href="{qrdata}">{qrdata}</a></p>
 """
-                if qrcode:
-                    qr = qrcode.QRCode(version=1, box_size=1, border=2)
-                    qr.add_data(qrdata)
-                    qr.make(fit=True)
-                    f = io.StringIO()
-                    qr.print_ascii(out=f)
-                    html += f'<div class="qr-wrapper"><pre class="qr-code">{f.getvalue()}</pre></div>'
-        except Exception as e:
-            pass
+                    if qrcode:
+                        qr = qrcode.QRCode(version=1, box_size=1, border=2)
+                        qr.add_data(qrdata)
+                        qr.make(fit=True)
+                        f = io.StringIO()
+                        qr.print_ascii(out=f)
+                        html += f'<div class="qr-wrapper"><pre class="qr-code">{f.getvalue()}</pre></div>'
+            except Exception as e:
+                html += f"<!-- Error getting QR: {e} -->"
             
     html += """
     </div>
