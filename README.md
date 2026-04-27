@@ -52,8 +52,9 @@ Once configured, you can start the bot normally with `docker-compose up -d`.
 ### Using Docker (Recommended)
 
 1. Clone the repository
-2. `docker-compose up -d`
-3. Scan the QR code generated in the console logs (using `docker-compose logs -f`) to add the bot, or check the terminal output for the invite link.
+2. Initialize the account as described in the **Account Setup** section above.
+3. Start the bot: `docker-compose up -d`
+4. Message the bot in Delta Chat and use `/initadmin` to claim ownership.
 
 ### Running Manually
 
