@@ -256,6 +256,7 @@ async def handle_index(request):
 <html>
 <head>
     <title>Delta Chat Ntfy Bot</title>
+    <link rel="icon" type="image/png" href="/icon.png">
     <style>
         body {
             background-color: #22272e;
@@ -275,9 +276,19 @@ async def handle_index(request):
             max-width: 800px;
             width: 100%;
         }
+        .header {
+            display: flex;
+            align-items: center;
+            margin-bottom: 1rem;
+        }
+        .logo {
+            height: 2.5rem;
+            margin-right: 1rem;
+            border-radius: 4px;
+        }
         h1 {
             color: #adbac7;
-            margin-top: 0;
+            margin: 0;
             font-size: 1.5rem;
         }
         code {
@@ -315,7 +326,10 @@ async def handle_index(request):
 </head>
 <body>
     <div class="container">
-        <h1>Delta Chat Ntfy Bot 🚀</h1>
+        <div class="header">
+            <img src="/icon.png" alt="Logo" class="logo">
+            <h1>Delta Chat Ntfy Bot</h1>
+        </div>
         <p>This server is running the Delta Chat Ntfy Bot. Send POST requests to <code>/{topic}</code> to broadcast notifications.</p>
 """
     
@@ -356,11 +370,17 @@ async def handle_index(request):
 async def handle_robots(request):
     return web.Response(text="User-agent: *\nDisallow: /\n", content_type="text/plain")
 
+async def handle_icon(request):
+    if os.path.exists('icon.png'):
+        return web.FileResponse('icon.png')
+    return web.Response(status=404)
+
 
 async def _run_web_server():
     app = web.Application()
     app.router.add_get('/', handle_index)
     app.router.add_get('/robots.txt', handle_robots)
+    app.router.add_get('/icon.png', handle_icon)
     app.router.add_post('/', handle_ntfy_post)
     app.router.add_post('/{topic}', handle_ntfy_post)
     app.router.add_put('/', handle_ntfy_post)
