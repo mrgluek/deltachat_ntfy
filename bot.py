@@ -195,7 +195,7 @@ async def handle_ntfy_post(request):
         for dc_chat_id in subscribers:
             is_private = True
             try:
-                chat_info = dc_bot_instance.rpc.get_basic_chat_info(dc_accid, dc_chat_id)
+                chat_info = dc_bot_instance.rpc.get_chat(dc_accid, dc_chat_id)
                 if isinstance(chat_info, dict):
                     chat_type = chat_info.get("type", 1)
                 else:
@@ -258,6 +258,35 @@ def start_web_server_thread():
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     loop.run_until_complete(_run_web_server())
+
+@dc_cli.on_cmd("debug")
+async def debug_command(bot, accid, event):
+    """Print debug info about subscriptions."""
+    chat_id = event.msg.chat_id
+    args = event.payload
+    
+    topic = args.strip() if args.strip() else "test"
+    subs = database.get_subscribers(topic)
+    all_topics = database.get_subscriptions(chat_id)
+    
+    debug_msg = f"**Debug Info**\n"
+    debug_msg += f"dc_bot_instance: {'Set' if dc_bot_instance else 'None'}\n"
+    debug_msg += f"dc_accid: {dc_accid}\n"
+    debug_msg += f"Your chat ID: {chat_id}\n"
+    debug_msg += f"Your subscribed topics: {all_topics}\n"
+    debug_msg += f"Subscribers for '{topic}': {subs}\n"
+    
+    try:
+        chat_info = bot.rpc.get_basic_chat_info(accid, chat_id)
+        if isinstance(chat_info, dict):
+            chat_type = chat_info.get("type", 1)
+        else:
+            chat_type = getattr(chat_info, "type", 1)
+        debug_msg += f"Your chat type: {chat_type} (is_private: {chat_type == 1})\n"
+    except Exception as e:
+        debug_msg += f"Failed to get your chat type: {e}\n"
+        
+    bot.rpc.send_msg(accid, chat_id, MsgData(text=debug_msg))
 
 @dc_cli.on_init
 def on_init(bot, args):
