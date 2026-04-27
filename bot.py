@@ -105,6 +105,41 @@ async def start_web_server():
     while True:
         await asyncio.sleep(3600)
 
+async def setup_bot_profile():
+    """Ensures the bot has the correct display name, status and avatar."""
+    global dc_accid
+    if not dc_accid:
+        return
+
+    # Wait a bit to ensure the core is ready
+    await asyncio.sleep(2)
+    
+    try:
+        dc_bot_instance.logger.info(f"Checking profile for account {dc_accid}...")
+        
+        # Set display name
+        current_name = dc_bot_instance.rpc.get_config(dc_accid, "displayname")
+        if current_name != "Ntfy Bot":
+            dc_bot_instance.logger.info(f"Changing name from '{current_name}' to 'Ntfy Bot'...")
+            dc_bot_instance.rpc.set_config(dc_accid, "displayname", "Ntfy Bot")
+        
+        # Set status
+        status_text = "A Delta Chat bot that emulates a ntfy.sh backend to broadcast notifications from HTTP POST requests to Delta Chat users and groups: https://github.com/mrgluek/deltachat_ntfy"
+        dc_bot_instance.rpc.set_config(dc_accid, "selfstatus", status_text)
+        
+        # Set bot avatar if icon file exists
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        icon_path = os.path.join(base_dir, "icon.png")
+        if os.path.exists(icon_path):
+            dc_bot_instance.logger.info(f"Icon found at {icon_path}, updating avatar...")
+            dc_bot_instance.rpc.set_config(dc_accid, "selfavatar", icon_path)
+        else:
+            dc_bot_instance.logger.warning(f"icon.png NOT found in {base_dir}. Please save the icon to enable avatar.")
+            
+        dc_bot_instance.logger.info("Profile synchronization complete.")
+    except Exception as e:
+        dc_bot_instance.logger.error(f"Failed to setup profile: {e}")
+
 @dc_cli.on_init
 def on_init(bot, args):
     """Called when the Delta Chat bot starts."""
@@ -115,33 +150,13 @@ def on_init(bot, args):
     accids = bot.rpc.get_all_account_ids()
     if accids:
         dc_accid = accids[0]
-        bot.logger.info(f"Setting up profile for account {dc_accid}...")
-        
-        # Set display name
-        bot.rpc.set_config(dc_accid, "displayname", "Ntfy Bot")
-        
-        # Set status
-        status_text = "A Delta Chat bot that emulates a ntfy.sh backend to broadcast notifications from HTTP POST requests to Delta Chat users and groups: https://github.com/mrgluek/deltachat_ntfy"
-        bot.rpc.set_config(dc_accid, "selfstatus", status_text)
-        
-        # Set bot avatar if icon file exists
-        try:
-            base_dir = os.path.dirname(os.path.abspath(__file__))
-            icon_path = os.path.join(base_dir, "icon.png")
-            if os.path.exists(icon_path):
-                bot.logger.info(f"Icon found at {icon_path}, setting avatar...")
-                bot.rpc.set_config(dc_accid, "selfavatar", icon_path)
-            else:
-                bot.logger.warning(f"Icon NOT found at {icon_path}. Avatar will not be set.")
-        except Exception as e:
-            bot.logger.error(f"Error setting avatar: {e}")
-        
-        bot.logger.info("Profile setup complete.")
-    else:
-        bot.logger.warning("No accounts found, skipping profile setup.")
     
     main_loop = asyncio.get_event_loop()
     main_loop.create_task(start_web_server())
+    if dc_accid:
+        main_loop.create_task(setup_bot_profile())
+    else:
+        bot.logger.warning("No accounts found, profile setup skipped.")
 
 @dc_cli.on(events.NewMessage(command="/help"))
 def help_command(bot, accid, event):
