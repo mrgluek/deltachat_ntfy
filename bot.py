@@ -277,7 +277,7 @@ async def debug_command(bot, accid, event):
     debug_msg += f"Subscribers for '{topic}': {subs}\n"
     
     try:
-        chat_info = bot.rpc.get_basic_chat_info(accid, chat_id)
+        chat_info = bot.rpc.get_chat(accid, chat_id)
         if isinstance(chat_info, dict):
             chat_type = chat_info.get("type", 1)
         else:
