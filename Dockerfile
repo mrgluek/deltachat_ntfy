@@ -8,4 +8,4 @@ ENV DC_DB_DIR=/app/data
 ENV DB_PATH=/app/data/ntfy.db
 VOLUME /app/data
 EXPOSE 8080
-CMD ["python", "-u", "bot.py"]
+CMD ["python", "-u", "bot.py", "serve"]

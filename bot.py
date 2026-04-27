@@ -227,4 +227,8 @@ def last_command(bot, accid, event):
     bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="\n".join(lines)))
 
 if __name__ == "__main__":
+    import sys
+    # If no subcommand is provided, default to 'serve' to start the bot
+    if len(sys.argv) == 1:
+        sys.argv.append("serve")
     dc_cli.start()
