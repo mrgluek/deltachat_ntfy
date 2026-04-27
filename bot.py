@@ -259,8 +259,8 @@ def start_web_server_thread():
     asyncio.set_event_loop(loop)
     loop.run_until_complete(_run_web_server())
 
-@dc_cli.on_cmd("debug")
-async def debug_command(bot, accid, event):
+@dc_cli.on(events.NewMessage(command="/debug"))
+def debug_command(bot, accid, event):
     """Print debug info about subscriptions."""
     chat_id = event.msg.chat_id
     args = event.payload
