@@ -264,6 +264,8 @@ async def _run_web_server():
     app.router.add_get('/robots.txt', handle_robots)
     app.router.add_post('/', handle_ntfy_post)
     app.router.add_post('/{topic}', handle_ntfy_post)
+    app.router.add_put('/', handle_ntfy_post)
+    app.router.add_put('/{topic}', handle_ntfy_post)
     
     runner = web.AppRunner(app)
     await runner.setup()
