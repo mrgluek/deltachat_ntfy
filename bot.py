@@ -393,6 +393,12 @@ def help_command(bot, accid, event):
             f"Admin Commands:\n"
             f"/initadmin — Claim bot ownership (if no admin is set)\n\n"
         )
+    elif admin_email.lower() == sender_email.lower():
+        help_text += (
+            f"Admin Commands:\n"
+            f"/accounts — List configured bot accounts\n"
+            f"/rmaccount <id> — Delete a bot account\n\n"
+        )
         
     help_text += f"Run your own bot: https://github.com/mrgluek/deltachat_ntfy"
 
