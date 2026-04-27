@@ -252,7 +252,24 @@ async def handle_ntfy_post(request):
     return web.json_response({"id": "ntfy-compat", "time": int(time.time()), "event": "message", "topic": topic, "message": message})
 
 async def handle_index(request):
-    return web.Response(text="Delta Chat Ntfy Bot is running! 🚀\n\nSend POST requests to /{topic} to broadcast notifications.")
+    text = "Delta Chat Ntfy Bot is running! 🚀\n\nSend POST requests to /{topic} to broadcast notifications.\n\n"
+    
+    if dc_bot_instance and dc_accid is not None:
+        try:
+            qrdata = dc_bot_instance.rpc.get_config(dc_accid, "qr")
+            if qrdata:
+                text += f"Add this bot to Delta Chat:\n{qrdata}\n\n"
+                if qrcode:
+                    qr = qrcode.QRCode(version=1, box_size=1, border=2)
+                    qr.add_data(qrdata)
+                    qr.make(fit=True)
+                    f = io.StringIO()
+                    qr.print_ascii(out=f)
+                    text += f.getvalue()
+        except Exception as e:
+            pass
+            
+    return web.Response(text=text, content_type="text/plain")
 
 async def handle_robots(request):
     return web.Response(text="User-agent: *\nDisallow: /\n", content_type="text/plain")
