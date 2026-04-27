@@ -1,4 +1,5 @@
 import asyncio
+import io
 import logging
 import os
 import threading
@@ -9,6 +10,11 @@ from deltachat2 import events, MsgData
 from deltabot_cli import BotCli
 
 import database
+
+try:
+    import qrcode
+except ImportError:
+    qrcode = None
 
 # Initialize logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -146,6 +152,34 @@ def on_init(bot, args):
     # Start web server in a separate thread so it works independently
     web_thread = threading.Thread(target=start_web_server_thread, daemon=True)
     web_thread.start()
+
+@dc_cli.on_start
+def on_start(bot, _args):
+    """Called after the bot is fully started. Print QR code for easy setup."""
+    global dc_bot_instance, dc_accid
+    dc_bot_instance = bot
+    accounts = bot.rpc.get_all_account_ids()
+    if accounts:
+        dc_accid = accounts[0]
+        try:
+            qrdata = bot.rpc.get_chat_securejoin_qr_code(dc_accid, None)
+            print("\n" + "=" * 50)
+            print("To add this bot, scan the QR code or copy the link below:\n")
+
+            if qrcode:
+                qr = qrcode.QRCode(version=1, box_size=1, border=2)
+                qr.add_data(qrdata)
+                qr.make(fit=True)
+                f = io.StringIO()
+                qr.print_ascii(out=f)
+                print(f.getvalue())
+            else:
+                print("(Install 'qrcode' package to see ASCII QR code here)")
+
+            print(qrdata)
+            print("\n" + "=" * 50 + "\n")
+        except Exception as e:
+            bot.logger.error(f"Failed to generate QR code: {e}")
 
 @dc_cli.on(events.NewMessage(command="/help"))
 def help_command(bot, accid, event):
