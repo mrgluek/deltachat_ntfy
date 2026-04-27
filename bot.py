@@ -398,7 +398,7 @@ async def _run_web_server():
         'apple-touch-icon.png', 'site.webmanifest', 'icon.png',
         'web-app-manifest-192x192.png', 'web-app-manifest-512x512.png'
     ]:
-        app.router.add_get(f'/{static_file}', handle_static, name=static_file)
+        app.router.add_get(f'/{static_file}', handle_static)
     
     app.router.add_post('/', handle_ntfy_post)
     app.router.add_post('/{topic}', handle_ntfy_post)
