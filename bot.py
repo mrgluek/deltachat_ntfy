@@ -4,6 +4,9 @@ import logging
 import os
 import threading
 import time
+import tempfile
+import urllib.parse
+
 
 from aiohttp import web
 from deltachat2 import events, MsgData
@@ -109,6 +112,11 @@ async def handle_ntfy_post(request):
     priority_raw = request.headers.get('Priority') or request.headers.get('X-Priority') or request.headers.get('prio') or request.headers.get('p', '3')
     tags_raw = request.headers.get('Tags') or request.headers.get('X-Tags') or request.headers.get('tag') or request.headers.get('ta', '')
     click_raw = request.headers.get('Click') or request.headers.get('X-Click', '')
+    attach_url = request.headers.get('Attach') or request.headers.get('X-Attach', '')
+    filename = request.headers.get('Filename') or request.headers.get('X-Filename') or request.headers.get('File') or request.headers.get('f', '')
+    
+    file_path = None
+    message = ""
     
     # Handle JSON body (Uptime Kuma uses this)
     content_type = request.headers.get('Content-Type', '')
@@ -121,6 +129,8 @@ async def handle_ntfy_post(request):
             title = data.get('title', title)
             priority_raw = str(data.get('priority', priority_raw))
             click_raw = data.get('click', click_raw)
+            attach_url = data.get('attach', attach_url)
+            filename = data.get('filename', filename)
             if 'tags' in data:
                 if isinstance(data['tags'], list):
                     tags_raw = ','.join(data['tags'])
@@ -130,7 +140,38 @@ async def handle_ntfy_post(request):
             logger.error(f"Failed to parse JSON body: {e}")
             message = await request.text()
     else:
-        message = await request.text()
+        if filename and not attach_url:
+            # Direct binary body upload (Step 6)
+            body = await request.read()
+            if body:
+                ext = os.path.splitext(filename)[1]
+                f = tempfile.NamedTemporaryFile(delete=False, suffix=ext)
+                f.write(body)
+                f.close()
+                file_path = f.name
+                message = "📎 File attachment" # Default message if only file is sent
+        else:
+            message = await request.text()
+            
+    # External attachment from URL (Step 5)
+    if attach_url and not file_path:
+        try:
+            parsed_url = urllib.parse.urlparse(attach_url)
+            ext = os.path.splitext(parsed_url.path)[1]
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.get(attach_url) as resp:
+                    if resp.status == 200:
+                        body = await resp.read()
+                        f = tempfile.NamedTemporaryFile(delete=False, suffix=ext)
+                        f.write(body)
+                        f.close()
+                        file_path = f.name
+                    else:
+                        logger.warning(f"Failed to download attachment from {attach_url}, status: {resp.status}")
+        except Exception as e:
+            logger.error(f"Error downloading attachment from {attach_url}: {e}")
+
     
     if not topic:
         logger.warning(f"Request to {request.path} failed: Topic required")
@@ -147,11 +188,23 @@ async def handle_ntfy_post(request):
     subscribers = database.get_subscribers(topic)
     if subscribers and dc_bot_instance and dc_accid is not None:
         formatted_msg = format_notification(title, message, priority_raw, tags_raw, click_raw)
+        
+        msg_data = MsgData(text=formatted_msg)
+        if file_path:
+            msg_data.file = file_path
+            
         for dc_chat_id in subscribers:
             try:
-                dc_bot_instance.rpc.send_msg(dc_accid, dc_chat_id, MsgData(text=formatted_msg))
+                dc_bot_instance.rpc.send_msg(dc_accid, dc_chat_id, msg_data)
             except Exception as e:
                 logger.error(f"Failed to send to {dc_chat_id}: {e}")
+                
+        # Clean up temp file
+        if file_path and os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+            except Exception as e:
+                logger.error(f"Failed to delete temp file {file_path}: {e}")
 
     return web.json_response({"id": "ntfy-compat", "time": int(time.time()), "event": "message", "topic": topic, "message": message})
 
