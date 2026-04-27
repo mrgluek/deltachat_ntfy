@@ -355,8 +355,7 @@ async def handle_index(request):
                 qrdata = dc_bot_instance.rpc.get_chat_securejoin_qr_code(active_accid, None)
                 if qrdata:
                     html += f"""
-        <p><strong>Add this bot to Delta Chat:</strong><br>
-        <a href="{qrdata}">{qrdata}</a></p>
+        <p><a href="{qrdata}">Add this bot</a> to Delta Chat:</p>
 """
                     if qrcode:
                         qr = qrcode.QRCode(version=1, box_size=1, border=2)
