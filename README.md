@@ -17,10 +17,10 @@ Use `curl` or any `ntfy` client and point it to your bot's web server URL.
 
 ```bash
 # Basic message
-curl -d "Backup successful 😀" https://ntfy.gluek.info/mytopic
+curl -d 'Backup successful 😀' https://ntfy.gluek.info/mytopic
 
 # With Title and Priority
-curl -H "Title: Backup Status" -H "Priority: high" -d "Backup successful 😀" https://ntfy.gluek.info/mytopic
+curl -H 'Title: Backup Status' -H 'Priority: high' -d 'Backup successful 😀' https://ntfy.gluek.info/mytopic
 ```
 
 The bot supports the following `ntfy` Priority values:
@@ -37,7 +37,7 @@ The bot supports the following `ntfy` Priority values:
 - **Click Actions 🔗**: Use the `Click` header to add a clickable link to your notification.
 - **Attachments 📎**:
   - **External URL**: Use `Attach: http://...` to have the bot download and send a file to the chat.
-  - **Direct Upload**: Use `curl -T file.jpg -H "Filename: file.jpg"` to upload a file directly as the message body.
+  - **Direct Upload**: Use `curl -T file.jpg -H 'Filename: file.jpg'` to upload a file directly as the message body.
 - **Group Support 👥**: Add the bot to any group and use `/sub <topic>` inside the group. The bot will appear to send messages on behalf of the topic (e.g., as `#topic`) using the `override_sender_name` feature.
 
 ### Testing Examples
@@ -46,27 +46,27 @@ Use your actual bot URL: `https://ntfy.gluek.info`.
 
 ```bash
 # 1. Basic message with aliases
-curl -H "ti: Alert" -H "p: 5" -d "Critical error" https://ntfy.gluek.info/test
+curl -H 'ti: Alert' -H 'p: 5' -d 'Critical error' https://ntfy.gluek.info/test
 
 # 2. Tags and Emojis
-curl -H "ta: warning,skull,fire" -d "Something is burning!" https://ntfy.gluek.info/test
+curl -H 'ta: warning,skull,fire' -d 'Something is burning!' https://ntfy.gluek.info/test
 
 # 3. Clickable Link
-curl -H "Click: https://github.com" -d "Check the repo" https://ntfy.gluek.info/test
+curl -H 'Click: https://github.com' -d 'Check the repo' https://ntfy.gluek.info/test
 
 # 4. External Attachment (URL)
-curl -H "Attach: https://github.com/fluidicon.png" -d "New avatar attached" https://ntfy.gluek.info/test
+curl -H 'Attach: https://github.com/fluidicon.png' -d 'New avatar attached' https://ntfy.gluek.info/test
 
 # 5. Direct File Upload
-curl -T my_photo.jpg -H "Filename: photo.jpg" https://ntfy.gluek.info/test
+curl -T my_photo.jpg -H 'Filename: photo.jpg' https://ntfy.gluek.info/test
 
-# 6. The "Ultimate" Test (Combined)
+# 6. The 'Ultimate' Test (Combined)
 curl -X POST https://ntfy.gluek.info/test \
-  -H "Title: System Status" \
-  -H "Tags: tada,rocket,check" \
-  -H "Click: https://status.example.com" \
-  -H "Attach: https://www.python.org/static/img/python-logo.png" \
-  -d "Everything is working perfectly! Check the attached logo and link."
+  -H 'Title: System Status' \
+  -H 'Tags: tada,rocket,check' \
+  -H 'Click: https://status.example.com' \
+  -H 'Attach: https://www.python.org/static/img/python-logo.png' \
+  -d 'Everything is working perfectly! Check the attached logo and link.'
 ```
 
 ### Account Setup
