@@ -13,3 +13,16 @@ services:
       - PORT=8080
       - DC_DB_DIR=/app/data
       - DB_PATH=/app/data/ntfy.db
+
+  # caddy:
+  #   image: caddy:latest
+  #   restart: always
+  #   ports:
+  #     - "80:80"
+  #     - "443:443"
+  #   volumes:
+  #     - ./Caddyfile:/etc/caddy/Caddyfile
+  #     - ./data/caddy_data:/data
+  #     - ./data/caddy_config:/config
+  #   depends_on:
+  #     - ntfy_bot

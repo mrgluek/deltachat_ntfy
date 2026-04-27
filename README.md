@@ -65,3 +65,12 @@ python bot.py init bot@example.com "YOUR_PASSWORD"
 3. Install requirements: `pip install -r requirements.txt`
 4. Set environment variables if needed (e.g., `PORT=8080`, `DB_PATH=ntfy.db`)
 5. Run the bot: `python bot.py`
+
+## Reverse Proxy (Caddy)
+
+For production use with HTTPS, you can use the provided `Caddyfile` example. A `caddy` service is also included in `docker-compose.yml` (commented out by default).
+
+To use it:
+1. Edit `Caddyfile` with your domain name.
+2. Uncomment the `caddy` service in `docker-compose.yml`.
+3. Run `docker-compose up -d`.
