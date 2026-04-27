@@ -193,14 +193,16 @@ async def handle_ntfy_post(request):
     subscribers = database.get_subscribers(topic)
     if subscribers and dc_bot_instance and dc_accid is not None:
         for dc_chat_id in subscribers:
+            logger.info(f"Preparing to send topic '{topic}' to chat {dc_chat_id}...")
             is_private = True
             try:
-                chat_info = dc_bot_instance.rpc.get_chat(dc_accid, dc_chat_id)
+                chat_info = dc_bot_instance.rpc.get_basic_chat_info(dc_accid, dc_chat_id)
                 if isinstance(chat_info, dict):
                     chat_type = chat_info.get("type", 1)
                 else:
                     chat_type = getattr(chat_info, "type", 1)
                 is_private = (chat_type == 1)
+                logger.info(f"Chat {dc_chat_id} is_private: {is_private}")
             except Exception as e:
                 logger.warning(f"Could not get chat info for {dc_chat_id}, defaulting to private: {e}")
 
@@ -213,8 +215,10 @@ async def handle_ntfy_post(request):
                 
                 if not is_private:
                     msg_data.override_sender_name = f"#{topic}"
-                    
-                dc_bot_instance.rpc.send_msg(dc_accid, dc_chat_id, msg_data)
+                
+                logger.info(f"Calling send_msg for chat {dc_chat_id}...")
+                msg_id = dc_bot_instance.rpc.send_msg(dc_accid, dc_chat_id, msg_data)
+                logger.info(f"Successfully sent msg_id {msg_id} to chat {dc_chat_id}")
             except Exception as e:
                 logger.error(f"Failed to send to {dc_chat_id}: {e}")
                 with open("data/debug.log", "a") as f:
@@ -232,10 +236,14 @@ async def handle_ntfy_post(request):
 async def handle_index(request):
     return web.Response(text="Delta Chat Ntfy Bot is running! 🚀\n\nSend POST requests to /{topic} to broadcast notifications.")
 
+async def handle_robots(request):
+    return web.Response(text="User-agent: *\nDisallow: /\n", content_type="text/plain")
+
 
 async def _run_web_server():
     app = web.Application()
     app.router.add_get('/', handle_index)
+    app.router.add_get('/robots.txt', handle_robots)
     app.router.add_post('/', handle_ntfy_post)
     app.router.add_post('/{topic}', handle_ntfy_post)
     
@@ -277,7 +285,7 @@ def debug_command(bot, accid, event):
     debug_msg += f"Subscribers for '{topic}': {subs}\n"
     
     try:
-        chat_info = bot.rpc.get_chat(accid, chat_id)
+        chat_info = bot.rpc.get_basic_chat_info(accid, chat_id)
         if isinstance(chat_info, dict):
             chat_type = chat_info.get("type", 1)
         else:
@@ -352,6 +360,8 @@ def help_command(bot, accid, event):
     contact = bot.rpc.get_contact(accid, msg.from_id)
     sender_email = contact.address
     
+    admin_email = database.get_config("admin_dc_email")
+    
     help_text = (
         f"👋 Hi {sender_email}!\n\n"
         f"I'm the Ntfy Bot. I receive HTTP POST requests and broadcast them to subscribed topics.\n\n"
@@ -363,10 +373,16 @@ def help_command(bot, accid, event):
         f"/newgroup [name] — Create a dedicated group chat for alerts\n"
         f"/donate — Support bot development ❤️\n"
         f"/help — Show this help message\n\n"
-        f"Admin Commands:\n"
-        f"/initadmin — Claim bot ownership (if no admin is set)\n\n"
-        f"Run your own bot: https://github.com/mrgluek/deltachat_ntfy"
     )
+    
+    if not admin_email:
+        help_text += (
+            f"Admin Commands:\n"
+            f"/initadmin — Claim bot ownership (if no admin is set)\n\n"
+        )
+        
+    help_text += f"Run your own bot: https://github.com/mrgluek/deltachat_ntfy"
+
     bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=help_text))
 
 @dc_cli.on(events.NewMessage(command="/newgroup"))
