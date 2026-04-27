@@ -447,6 +447,31 @@ def initadmin_command(bot, accid, event):
     database.set_config("admin_dc_email", sender_email)
     bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"👑 You are now the bot administrator ({sender_email})."))
 
+@dc_cli.on(events.NewMessage(command="/accounts"))
+def accounts_command(bot, accid, event):
+    msg = event.msg
+    contact = bot.rpc.get_contact(accid, msg.from_id)
+    sender_email = contact.address
+    
+    admin_email = database.get_config("admin_dc_email")
+    if not admin_email or admin_email.lower() != sender_email.lower():
+        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="❌ This command is only for the administrator."))
+        return
+        
+    accounts = bot.rpc.get_all_account_ids()
+    reply = f"🤖 **Configured Bot Accounts:** {len(accounts)}\n\n"
+    
+    for aid in accounts:
+        try:
+            addr = bot.rpc.get_config(aid, "addr")
+            state = bot.rpc.get_config(aid, "configured")
+            reply += f"• Account ID: {aid}\n  Email: {addr}\n  Configured: {state}\n\n"
+        except Exception as e:
+            reply += f"• Account ID: {aid} (Error reading: {e})\n\n"
+            
+    reply += "Note: The bot now automatically routes messages to the correct account based on the chat ID."
+    bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=reply))
+
 @dc_cli.on(events.NewMessage(command="/sub"))
 def sub_command(bot, accid, event):
     msg = event.msg
