@@ -256,7 +256,12 @@ async def handle_index(request):
 <html>
 <head>
     <title>Delta Chat Ntfy Bot</title>
-    <link rel="icon" type="image/png" href="/icon.png">
+    <link rel="icon" type="image/png" href="/favicon-96x96.png" sizes="96x96" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="shortcut icon" href="/favicon.ico" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <meta name="apple-mobile-web-app-title" content="Ntfy Bot" />
+    <link rel="manifest" href="/site.webmanifest" />
     <style>
         body {
             background-color: #22272e;
@@ -370,9 +375,16 @@ async def handle_index(request):
 async def handle_robots(request):
     return web.Response(text="User-agent: *\nDisallow: /\n", content_type="text/plain")
 
-async def handle_icon(request):
-    if os.path.exists('icon.png'):
-        return web.FileResponse('icon.png')
+async def handle_static(request):
+    filename = request.path.lstrip('/')
+    # List of allowed static files for security
+    allowed_files = [
+        'favicon-96x96.png', 'favicon.svg', 'favicon.ico', 
+        'apple-touch-icon.png', 'site.webmanifest', 'icon.png',
+        'web-app-manifest-192x192.png', 'web-app-manifest-512x512.png'
+    ]
+    if filename in allowed_files and os.path.exists(filename):
+        return web.FileResponse(filename)
     return web.Response(status=404)
 
 
@@ -380,7 +392,14 @@ async def _run_web_server():
     app = web.Application()
     app.router.add_get('/', handle_index)
     app.router.add_get('/robots.txt', handle_robots)
-    app.router.add_get('/icon.png', handle_icon)
+    # Add routes for all static files
+    for static_file in [
+        'favicon-96x96.png', 'favicon.svg', 'favicon.ico', 
+        'apple-touch-icon.png', 'site.webmanifest', 'icon.png',
+        'web-app-manifest-192x192.png', 'web-app-manifest-512x512.png'
+    ]:
+        app.router.add_get(f'/{static_file}', handle_static, name=static_file)
+    
     app.router.add_post('/', handle_ntfy_post)
     app.router.add_post('/{topic}', handle_ntfy_post)
     app.router.add_put('/', handle_ntfy_post)
