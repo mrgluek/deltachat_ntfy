@@ -195,7 +195,13 @@ async def handle_ntfy_post(request):
         for dc_chat_id in subscribers:
             try:
                 chat_info = dc_bot_instance.rpc.get_basic_chat_info(dc_accid, dc_chat_id)
-                is_private = chat_info.get("type") == 1
+                # Handle both dict and object returns robustly
+                if isinstance(chat_info, dict):
+                    chat_type = chat_info.get("type", 1)
+                else:
+                    chat_type = getattr(chat_info, "type", 1)
+                
+                is_private = (chat_type == 1)
                 
                 formatted_msg = format_notification(title, message, priority_raw, tags_raw, click_raw, topic, is_private)
                 
@@ -209,6 +215,8 @@ async def handle_ntfy_post(request):
                 dc_bot_instance.rpc.send_msg(dc_accid, dc_chat_id, msg_data)
             except Exception as e:
                 logger.error(f"Failed to send to {dc_chat_id}: {e}")
+                with open("data/debug.log", "a") as f:
+                    f.write(f"Failed to send to {dc_chat_id}: {e}\n")
                 
         # Clean up temp file
         if file_path and os.path.exists(file_path):
