@@ -129,12 +129,22 @@ async def setup_bot_profile():
         
         # Set bot avatar if icon file exists
         base_dir = os.path.dirname(os.path.abspath(__file__))
-        icon_path = os.path.join(base_dir, "icon.png")
-        if os.path.exists(icon_path):
+        possible_paths = [
+            os.path.join(base_dir, "icon.png"),
+            os.path.join(base_dir, "data", "icon.png")
+        ]
+        
+        icon_path = None
+        for p in possible_paths:
+            if os.path.exists(p):
+                icon_path = p
+                break
+                
+        if icon_path:
             dc_bot_instance.logger.info(f"Icon found at {icon_path}, updating avatar...")
             dc_bot_instance.rpc.set_config(dc_accid, "selfavatar", icon_path)
         else:
-            dc_bot_instance.logger.warning(f"icon.png NOT found in {base_dir}. Please save the icon to enable avatar.")
+            dc_bot_instance.logger.warning(f"icon.png NOT found in {base_dir} or {os.path.join(base_dir, 'data')}.")
             
         dc_bot_instance.logger.info("Profile synchronization complete.")
     except Exception as e:
