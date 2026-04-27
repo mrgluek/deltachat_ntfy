@@ -469,8 +469,39 @@ def accounts_command(bot, accid, event):
         except Exception as e:
             reply += f"• Account ID: {aid} (Error reading: {e})\n\n"
             
-    reply += "Note: The bot now automatically routes messages to the correct account based on the chat ID."
+    reply += "To delete an account, use: /rmaccount <id>\nNote: The bot now automatically routes messages to the correct account based on the chat ID."
     bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=reply))
+
+@dc_cli.on(events.NewMessage(command="/rmaccount"))
+def rmaccount_command(bot, accid, event):
+    msg = event.msg
+    contact = bot.rpc.get_contact(accid, msg.from_id)
+    sender_email = contact.address
+    
+    admin_email = database.get_config("admin_dc_email")
+    if not admin_email or admin_email.lower() != sender_email.lower():
+        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="❌ This command is only for the administrator."))
+        return
+        
+    try:
+        target_aid = int(event.payload.strip())
+    except ValueError:
+        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="❌ Usage: /rmaccount <account_id>"))
+        return
+        
+    if target_aid == accid:
+        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="❌ You cannot delete the account you are currently using to talk to the bot!"))
+        return
+        
+    try:
+        # Assuming the method is remove_account in deltachat2
+        if hasattr(bot.rpc, "remove_account"):
+            bot.rpc.remove_account(target_aid)
+        else:
+            bot.rpc.delete_account(target_aid)
+        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"✅ Account {target_aid} has been successfully deleted."))
+    except Exception as e:
+        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"❌ Failed to delete account {target_aid}: {e}"))
 
 @dc_cli.on(events.NewMessage(command="/sub"))
 def sub_command(bot, accid, event):
