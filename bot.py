@@ -8,6 +8,7 @@ import tempfile
 import urllib.parse
 
 
+import aiohttp
 from aiohttp import web
 from deltachat2 import events, MsgData
 from deltabot_cli import BotCli
@@ -194,35 +195,47 @@ async def handle_ntfy_post(request):
     if subscribers and dc_bot_instance and dc_accid is not None:
         for dc_chat_id in subscribers:
             logger.info(f"Preparing to send topic '{topic}' to chat {dc_chat_id}...")
-            is_private = True
-            try:
-                chat_info = dc_bot_instance.rpc.get_basic_chat_info(dc_accid, dc_chat_id)
-                if isinstance(chat_info, dict):
-                    chat_type = chat_info.get("type", 1)
-                else:
-                    chat_type = getattr(chat_info, "type", 1)
-                is_private = (chat_type == 1)
-                logger.info(f"Chat {dc_chat_id} is_private: {is_private}")
-            except Exception as e:
-                logger.warning(f"Could not get chat info for {dc_chat_id}, defaulting to private: {e}")
+            
+            success = False
+            for acc_id in dc_bot_instance.rpc.get_all_account_ids():
+                is_private = True
+                try:
+                    chat_info = dc_bot_instance.rpc.get_basic_chat_info(acc_id, dc_chat_id)
+                    if isinstance(chat_info, dict):
+                        chat_type = chat_info.get("type", 1)
+                    else:
+                        chat_type = getattr(chat_info, "type", 1)
+                    is_private = (chat_type == 1)
+                    logger.info(f"Chat {dc_chat_id} found on account {acc_id}, is_private: {is_private}")
+                except Exception as e:
+                    # This exception means the chat doesn't exist on this account, try next account
+                    continue
 
-            try:
-                formatted_msg = format_notification(title, message, priority_raw, tags_raw, click_raw, topic, is_private)
-                
-                msg_data = MsgData(text=formatted_msg)
-                if file_path:
-                    msg_data.file = file_path
-                
-                if not is_private:
-                    msg_data.override_sender_name = f"#{topic}"
-                
-                logger.info(f"Calling send_msg for chat {dc_chat_id}...")
-                msg_id = dc_bot_instance.rpc.send_msg(dc_accid, dc_chat_id, msg_data)
-                logger.info(f"Successfully sent msg_id {msg_id} to chat {dc_chat_id}")
-            except Exception as e:
-                logger.error(f"Failed to send to {dc_chat_id}: {e}")
-                with open("data/debug.log", "a") as f:
-                    f.write(f"Failed to send to {dc_chat_id}: {e}\n")
+                try:
+                    formatted_msg = format_notification(title, message, priority_raw, tags_raw, click_raw, topic, is_private)
+                    
+                    msg_data = MsgData(text=formatted_msg)
+                    if file_path:
+                        msg_data.file = file_path
+                    
+                    if not is_private:
+                        msg_data.override_sender_name = f"#{topic}"
+                    
+                    logger.info(f"Calling send_msg for chat {dc_chat_id} on account {acc_id}...")
+                    msg_id = dc_bot_instance.rpc.send_msg(acc_id, dc_chat_id, msg_data)
+                    logger.info(f"Successfully sent msg_id {msg_id} to chat {dc_chat_id} on account {acc_id}")
+                    success = True
+                    break # Break out of account loop, we found it!
+                except Exception as e:
+                    logger.error(f"Failed to send to {dc_chat_id} on account {acc_id}: {e}")
+                    # Even if send_msg fails, we found the right account but something else broke.
+                    # We log it and break out of the account loop.
+                    with open("data/debug.log", "a") as f:
+                        f.write(f"Failed to send to {dc_chat_id} on account {acc_id}: {e}\n")
+                    break
+
+            if not success:
+                logger.warning(f"Could not find chat {dc_chat_id} on any configured account.")
                 
         # Clean up temp file
         if file_path and os.path.exists(file_path):
