@@ -322,10 +322,11 @@ async def handle_index(request):
             color: #000000;
             padding: 0;
             margin: 0;
-            font-family: monospace;
-            font-size: 12px;
+            font-family: "Courier New", Courier, monospace;
+            font-size: 10px;
             line-height: 1;
-            letter-spacing: 0;
+            letter-spacing: -0.1em;
+            word-spacing: 0;
         }
     </style>
 </head>
