@@ -11,8 +11,8 @@ REMOTE=$(git rev-parse @{u})
 if [ "$LOCAL" != "$REMOTE" ]; then
     echo "🆕 New changes detected. Updating..."
     git pull
-    docker-compose down
-    docker-compose up -d --build
+    docker compose down
+    docker compose up -d --build
     docker image prune -f
     echo "✅ Updated, restarted, and cleaned up old images."
 else

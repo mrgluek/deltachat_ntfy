@@ -36,16 +36,16 @@ Before running the bot, you must initialize at least one Delta Chat account.
 **Manual Setup (Custom Email/Password)**
 If you want to use a specific email account:
 ```bash
-docker-compose run --rm ntfy_bot python bot.py init bot@example.com "YOUR_PASSWORD"
+docker compose run --rm ntfy_bot python bot.py init bot@example.com "YOUR_PASSWORD"
 ```
 
 **Automatic Setup (Chatmail)**
 If you want to use a chatmail server (which doesn't require a pre-existing password for new accounts), choose a desired address at a chatmail domain (e.g., `nine.testrun.org`):
 ```bash
-docker-compose run --rm ntfy_bot python bot.py init mybot@nine.testrun.org
+docker compose run --rm ntfy_bot python bot.py init mybot@nine.testrun.org
 ```
 
-Once configured, you can start the bot normally with `docker-compose up -d`.
+Once configured, you can start the bot normally with `docker compose up -d`.
 
 ## Running the Bot
 
@@ -53,7 +53,7 @@ Once configured, you can start the bot normally with `docker-compose up -d`.
 
 1. Clone the repository
 2. Initialize the account as described in the **Account Setup** section above.
-3. Start the bot: `docker-compose up -d`
+3. Start the bot: `docker compose up -d`
 4. Message the bot in Delta Chat and use `/initadmin` to claim ownership.
 
 ### Running Manually
@@ -71,4 +71,4 @@ For production use with HTTPS, you can use the provided `Caddyfile` example. A `
 To use it:
 1. Edit `Caddyfile` with your domain name.
 2. Uncomment the `caddy` service in `docker-compose.yml`.
-3. Run `docker-compose up -d`.
+3. Run `docker compose up -d`.
