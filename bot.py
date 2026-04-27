@@ -75,16 +75,31 @@ async def handle_ntfy_post(request):
     if not topic:
         # Fallback to headers or query params
         topic = request.headers.get('X-Topic') or request.headers.get('Topic') or request.query.get('topic') or request.query.get('t')
-    
-    if not topic:
-        logger.warning(f"Request to {request.path} failed: Topic required")
-        return web.Response(status=400, text="Topic required. Use /{topic}, ?topic=... or Topic header.")
 
     title = request.headers.get('Title', '')
     priority_raw = request.headers.get('Priority', '3')
-    message = await request.text()
     
-    if not message.strip():
+    # Handle JSON body (Uptime Kuma uses this)
+    content_type = request.headers.get('Content-Type', '')
+    if 'application/json' in content_type:
+        try:
+            data = await request.json()
+            if not topic:
+                topic = data.get('topic')
+            message = data.get('message', '')
+            title = data.get('title', title)
+            priority_raw = str(data.get('priority', priority_raw))
+        except Exception as e:
+            logger.error(f"Failed to parse JSON body: {e}")
+            message = await request.text()
+    else:
+        message = await request.text()
+    
+    if not topic:
+        logger.warning(f"Request to {request.path} failed: Topic required")
+        return web.Response(status=400, text="Topic required. Use /{topic}, Topic header or 'topic' in JSON.")
+
+    if not message or not str(message).strip():
         return web.Response(status=400, text="Message body required")
 
     # Save to database
