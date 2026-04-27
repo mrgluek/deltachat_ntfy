@@ -17,10 +17,10 @@ Use `curl` or any `ntfy` client and point it to your bot's web server URL.
 
 ```bash
 # Basic message
-curl -d "Backup successful 😀" http://localhost:8080/mytopic
+curl -d "Backup successful 😀" https://ntfy.gluek.info/mytopic
 
 # With Title and Priority
-curl -H "Title: Backup Status" -H "Priority: high" -d "Backup successful 😀" http://localhost:8080/mytopic
+curl -H "Title: Backup Status" -H "Priority: high" -d "Backup successful 😀" https://ntfy.gluek.info/mytopic
 ```
 
 The bot supports the following `ntfy` Priority values:
@@ -42,26 +42,26 @@ The bot supports the following `ntfy` Priority values:
 
 ### Testing Examples
 
-Replace `http://localhost:8080` with your actual bot URL (e.g., `https://ntfy.gluek.info`).
+Use your actual bot URL: `https://ntfy.gluek.info`.
 
 ```bash
 # 1. Basic message with aliases
-curl -H "ti: Alert" -H "p: 5" -d "Critical error" http://localhost:8080/test
+curl -H "ti: Alert" -H "p: 5" -d "Critical error" https://ntfy.gluek.info/test
 
 # 2. Tags and Emojis
-curl -H "ta: warning,skull,fire" -d "Something is burning!" http://localhost:8080/test
+curl -H "ta: warning,skull,fire" -d "Something is burning!" https://ntfy.gluek.info/test
 
 # 3. Clickable Link
-curl -H "Click: https://github.com" -d "Check the repo" http://localhost:8080/test
+curl -H "Click: https://github.com" -d "Check the repo" https://ntfy.gluek.info/test
 
 # 4. External Attachment (URL)
-curl -H "Attach: https://github.com/fluidicon.png" -d "New avatar attached" http://localhost:8080/test
+curl -H "Attach: https://github.com/fluidicon.png" -d "New avatar attached" https://ntfy.gluek.info/test
 
 # 5. Direct File Upload
-curl -T my_photo.jpg -H "Filename: photo.jpg" http://localhost:8080/test
+curl -T my_photo.jpg -H "Filename: photo.jpg" https://ntfy.gluek.info/test
 
 # 6. The "Ultimate" Test (Combined)
-curl -X POST http://localhost:8080/test \
+curl -X POST https://ntfy.gluek.info/test \
   -H "Title: System Status" \
   -H "Tags: tada,rocket,check" \
   -H "Click: https://status.example.com" \
