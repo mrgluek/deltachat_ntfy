@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import threading
 import time
 
 from aiohttp import web
@@ -18,7 +19,6 @@ dc_cli = BotCli("ntfybot")
 # Global references
 dc_bot_instance = None
 dc_accid = None
-main_loop = None
 
 def get_priority_emoji(priority_raw: str) -> str:
     priority_raw = str(priority_raw).lower()
@@ -92,7 +92,7 @@ async def handle_index(request):
     return web.Response(text="Delta Chat Ntfy Bot is running! 🚀\n\nSend POST requests to /{topic} to broadcast notifications.")
 
 
-async def start_web_server():
+async def _run_web_server():
     app = web.Application()
     app.router.add_get('/', handle_index)
     app.router.add_post('/{topic}', handle_ntfy_post)
@@ -103,18 +103,24 @@ async def start_web_server():
     port = int(os.getenv("PORT", "8080"))
     site = web.TCPSite(runner, '0.0.0.0', port)
     
-    dc_bot_instance.logger.info(f"Starting web server on 0.0.0.0:{port}...")
+    logger.info(f"Starting web server on 0.0.0.0:{port}...")
     await site.start()
-    dc_bot_instance.logger.info("Web server is UP and running.")
+    logger.info("Web server is UP and running.")
     
     # Keep server running
     while True:
         await asyncio.sleep(3600)
 
+def start_web_server_thread():
+    """Start the web server in a separate thread with its own event loop."""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(_run_web_server())
+
 @dc_cli.on_init
 def on_init(bot, args):
     """Called when the Delta Chat bot starts."""
-    global dc_bot_instance, dc_accid, main_loop
+    global dc_bot_instance, dc_accid
     bot.logger.info("Initializing Delta Chat ntfy bot...")
     
     dc_bot_instance = bot
@@ -137,8 +143,9 @@ def on_init(bot, args):
         except Exception as e:
             bot.logger.warning(f"Could not set avatar: {e}")
     
-    main_loop = asyncio.get_event_loop()
-    main_loop.create_task(start_web_server())
+    # Start web server in a separate thread so it works independently
+    web_thread = threading.Thread(target=start_web_server_thread, daemon=True)
+    web_thread.start()
 
 @dc_cli.on(events.NewMessage(command="/help"))
 def help_command(bot, accid, event):
