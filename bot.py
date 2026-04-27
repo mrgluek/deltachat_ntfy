@@ -193,16 +193,18 @@ async def handle_ntfy_post(request):
     subscribers = database.get_subscribers(topic)
     if subscribers and dc_bot_instance and dc_accid is not None:
         for dc_chat_id in subscribers:
+            is_private = True
             try:
                 chat_info = dc_bot_instance.rpc.get_basic_chat_info(dc_accid, dc_chat_id)
-                # Handle both dict and object returns robustly
                 if isinstance(chat_info, dict):
                     chat_type = chat_info.get("type", 1)
                 else:
                     chat_type = getattr(chat_info, "type", 1)
-                
                 is_private = (chat_type == 1)
-                
+            except Exception as e:
+                logger.warning(f"Could not get chat info for {dc_chat_id}, defaulting to private: {e}")
+
+            try:
                 formatted_msg = format_notification(title, message, priority_raw, tags_raw, click_raw, topic, is_private)
                 
                 msg_data = MsgData(text=formatted_msg)
