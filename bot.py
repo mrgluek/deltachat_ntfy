@@ -395,7 +395,7 @@ def help_command(bot, accid, event):
     
     if not admin_email:
         help_text += (
-            f"Admin Commands:\n"
+            f"Initialisation Command:\n"
             f"/initadmin — Claim bot ownership (if no admin is set)\n\n"
         )
     elif admin_email.lower() == sender_email.lower():
