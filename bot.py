@@ -202,10 +202,15 @@ async def handle_ntfy_post(request):
                 try:
                     chat_info = dc_bot_instance.rpc.get_basic_chat_info(acc_id, dc_chat_id)
                     if isinstance(chat_info, dict):
-                        chat_type = chat_info.get("type", 1)
+                        if "chat_type" in chat_info:
+                            is_private = (chat_info["chat_type"] == "Single")
+                        else:
+                            is_private = (chat_info.get("type", 1) == 1)
                     else:
-                        chat_type = getattr(chat_info, "type", 1)
-                    is_private = (chat_type == 1)
+                        if hasattr(chat_info, "chat_type"):
+                            is_private = (chat_info.chat_type == "Single")
+                        else:
+                            is_private = (getattr(chat_info, "type", 1) == 1)
                     logger.info(f"Chat {dc_chat_id} found on account {acc_id}, is_private: {is_private}")
                 except Exception as e:
                     # This exception means the chat doesn't exist on this account, try next account
