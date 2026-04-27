@@ -1,5 +1,6 @@
 services:
   ntfy_bot:
+    container_name: deltachat_ntfy_bot
     build: .
     restart: always
     volumes:
