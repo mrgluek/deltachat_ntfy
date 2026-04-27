@@ -156,6 +156,11 @@ async def setup_bot_profile():
     except Exception as e:
         dc_bot_instance.logger.error(f"Failed to setup profile: {e}")
 
+def sync_setup_bot_profile():
+    """Sync wrapper to trigger profile setup from sync handlers."""
+    if main_loop and main_loop.is_running():
+        main_loop.create_task(setup_bot_profile())
+
 @dc_cli.on_init
 def on_init(bot, args):
     """Called when the Delta Chat bot starts."""
@@ -176,6 +181,7 @@ def on_init(bot, args):
 
 @dc_cli.on(events.NewMessage(command="/help"))
 def help_command(bot, accid, event):
+    sync_setup_bot_profile()
     msg = event.msg
     contact = bot.rpc.get_contact(accid, msg.from_id)
     sender_email = contact.address
