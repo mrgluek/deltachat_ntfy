@@ -16,6 +16,8 @@ try:
 except ImportError:
     qrcode = None
 
+import emoji
+
 # Initialize logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("ntfy_bot")
@@ -54,16 +56,40 @@ def parse_priority(priority_raw: str) -> int:
         return 1
     return 3
 
-def format_notification(title: str, message: str, priority_raw: str) -> str:
-    emoji = get_priority_emoji(priority_raw)
+def parse_tags(tags_raw: str):
+    if not tags_raw:
+        return [], []
+    tags_list = [t.strip() for t in tags_raw.split(',') if t.strip()]
+    emojis = []
+    text_tags = []
+    for tag in tags_list:
+        emojized = emoji.emojize(f":{tag}:", language='alias')
+        if emojized != f":{tag}:":
+            emojis.append(emojized)
+        else:
+            text_tags.append(tag)
+    return emojis, text_tags
+
+def format_notification(title: str, message: str, priority_raw: str, tags_raw: str) -> str:
+    priority_emoji = get_priority_emoji(priority_raw)
+    emojis, text_tags = parse_tags(tags_raw)
+    
+    emoji_prefix = priority_emoji
+    if emojis:
+        emoji_prefix += " " + "".join(emojis)
+
     formatted = ""
     if title:
-        formatted += f"{emoji} **{title}**\n\n"
-    elif priority_raw and priority_raw not in ("3", "default", ""):
-        # If no title but non-default priority, still show emoji
-        formatted += f"{emoji}\n\n"
+        formatted += f"{emoji_prefix} **{title}**\n\n"
+    elif priority_raw and priority_raw not in ("3", "default", "") or emojis:
+        # If no title but non-default priority or custom emojis, still show emoji header
+        formatted += f"{emoji_prefix}\n\n"
         
     formatted += message
+    
+    if text_tags:
+        formatted += "\n\nTags: " + ", ".join(text_tags)
+        
     return formatted
 
 async def handle_ntfy_post(request):
@@ -76,8 +102,9 @@ async def handle_ntfy_post(request):
         # Fallback to headers or query params
         topic = request.headers.get('X-Topic') or request.headers.get('Topic') or request.query.get('topic') or request.query.get('t')
 
-    title = request.headers.get('Title', '')
-    priority_raw = request.headers.get('Priority', '3')
+    title = request.headers.get('Title') or request.headers.get('X-Title') or request.headers.get('ti') or request.headers.get('t', '')
+    priority_raw = request.headers.get('Priority') or request.headers.get('X-Priority') or request.headers.get('prio') or request.headers.get('p', '3')
+    tags_raw = request.headers.get('Tags') or request.headers.get('X-Tags') or request.headers.get('tag') or request.headers.get('ta', '')
     
     # Handle JSON body (Uptime Kuma uses this)
     content_type = request.headers.get('Content-Type', '')
@@ -89,6 +116,11 @@ async def handle_ntfy_post(request):
             message = data.get('message', '')
             title = data.get('title', title)
             priority_raw = str(data.get('priority', priority_raw))
+            if 'tags' in data:
+                if isinstance(data['tags'], list):
+                    tags_raw = ','.join(data['tags'])
+                else:
+                    tags_raw = str(data['tags'])
         except Exception as e:
             logger.error(f"Failed to parse JSON body: {e}")
             message = await request.text()
@@ -109,7 +141,7 @@ async def handle_ntfy_post(request):
     # Broadcast to subscribers
     subscribers = database.get_subscribers(topic)
     if subscribers and dc_bot_instance and dc_accid is not None:
-        formatted_msg = format_notification(title, message, priority_raw)
+        formatted_msg = format_notification(title, message, priority_raw, tags_raw)
         for dc_chat_id in subscribers:
             try:
                 dc_bot_instance.rpc.send_msg(dc_accid, dc_chat_id, MsgData(text=formatted_msg))
