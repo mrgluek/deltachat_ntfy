@@ -310,6 +310,7 @@ def help_command(bot, accid, event):
         f"/unsub <topic> — Unsubscribe from a topic\n"
         f"/list — Show subscribed topics\n"
         f"/last — Show last 5 notifications from subscribed topics\n"
+        f"/newgroup [name] — Create a dedicated group chat for alerts\n"
         f"/donate — Support bot development ❤️\n"
         f"/help — Show this help message\n\n"
         f"Admin Commands:\n"
@@ -317,6 +318,27 @@ def help_command(bot, accid, event):
         f"Run your own bot: https://github.com/mrgluek/deltachat_ntfy"
     )
     bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=help_text))
+
+@dc_cli.on(events.NewMessage(command="/newgroup"))
+def newgroup_command(bot, accid, event):
+    msg = event.msg
+    group_name = event.payload.strip() or "Ntfy Alerts"
+    
+    try:
+        # Create a new group chat
+        new_chat_id = bot.rpc.create_group_chat(accid, group_name, False)
+        # Get secure join link
+        qrdata = bot.rpc.get_chat_securejoin_qr_code(accid, new_chat_id)
+        
+        reply_text = (
+            f"✅ Group '{group_name}' created!\n\n"
+            f"Join link: {qrdata}\n\n"
+            f"Share this link or scan the QR code to join the group. Once inside the group, use /sub to subscribe the group to topics!"
+        )
+        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=reply_text))
+    except Exception as e:
+        bot.logger.error(f"Failed to create group: {e}")
+        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"❌ Failed to create group: {e}"))
 
 @dc_cli.on(events.NewMessage(command="/donate"))
 def donate_command(bot, accid, event):
