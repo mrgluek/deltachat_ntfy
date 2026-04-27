@@ -73,7 +73,7 @@ def parse_tags(tags_raw: str):
             text_tags.append(tag)
     return emojis, text_tags
 
-def format_notification(title: str, message: str, priority_raw: str, tags_raw: str, click_raw: str) -> str:
+def format_notification(title: str, message: str, priority_raw: str, tags_raw: str, click_raw: str, topic: str, is_private: bool) -> str:
     priority_emoji = get_priority_emoji(priority_raw)
     emojis, text_tags = parse_tags(tags_raw)
     
@@ -82,11 +82,16 @@ def format_notification(title: str, message: str, priority_raw: str, tags_raw: s
         emoji_prefix += " " + "".join(emojis)
 
     formatted = ""
+    if is_private:
+        formatted += f"[{topic}]\n"
+
     if title:
         formatted += f"{emoji_prefix} **{title}**\n\n"
     elif priority_raw and priority_raw not in ("3", "default", "") or emojis:
         # If no title but non-default priority or custom emojis, still show emoji header
         formatted += f"{emoji_prefix}\n\n"
+    elif is_private:
+        formatted += "\n"
         
     formatted += message
     
@@ -187,14 +192,20 @@ async def handle_ntfy_post(request):
     # Broadcast to subscribers
     subscribers = database.get_subscribers(topic)
     if subscribers and dc_bot_instance and dc_accid is not None:
-        formatted_msg = format_notification(title, message, priority_raw, tags_raw, click_raw)
-        
-        msg_data = MsgData(text=formatted_msg)
-        if file_path:
-            msg_data.file = file_path
-            
         for dc_chat_id in subscribers:
             try:
+                chat_info = dc_bot_instance.rpc.get_basic_chat_info(dc_accid, dc_chat_id)
+                is_private = chat_info.get("type") == 1
+                
+                formatted_msg = format_notification(title, message, priority_raw, tags_raw, click_raw, topic, is_private)
+                
+                msg_data = MsgData(text=formatted_msg)
+                if file_path:
+                    msg_data.file = file_path
+                
+                if not is_private:
+                    msg_data.override_sender_name = f"#{topic}"
+                    
                 dc_bot_instance.rpc.send_msg(dc_accid, dc_chat_id, msg_data)
             except Exception as e:
                 logger.error(f"Failed to send to {dc_chat_id}: {e}")
