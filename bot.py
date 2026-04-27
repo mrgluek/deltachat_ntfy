@@ -69,7 +69,11 @@ def format_notification(title: str, message: str, priority_raw: str) -> str:
 async def handle_ntfy_post(request):
     topic = request.match_info.get('topic')
     if not topic:
-        return web.Response(status=400, text="Topic required")
+        # Fallback to headers (standard ntfy-sh behavior for some clients)
+        topic = request.headers.get('X-Topic') or request.headers.get('Topic')
+    
+    if not topic:
+        return web.Response(status=400, text="Topic required. Use /{topic} or Topic header.")
 
     title = request.headers.get('Title', '')
     priority_raw = request.headers.get('Priority', '3')
@@ -101,6 +105,7 @@ async def handle_index(request):
 async def _run_web_server():
     app = web.Application()
     app.router.add_get('/', handle_index)
+    app.router.add_post('/', handle_ntfy_post)
     app.router.add_post('/{topic}', handle_ntfy_post)
     
     runner = web.AppRunner(app)
