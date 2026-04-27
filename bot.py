@@ -88,9 +88,13 @@ async def handle_ntfy_post(request):
 
     return web.json_response({"id": "ntfy-compat", "time": int(time.time()), "event": "message", "topic": topic, "message": message})
 
+async def handle_index(request):
+    return web.Response(text="Delta Chat Ntfy Bot is running! 🚀\n\nSend POST requests to /{topic} to broadcast notifications.")
+
 
 async def start_web_server():
     app = web.Application()
+    app.router.add_get('/', handle_index)
     app.router.add_post('/{topic}', handle_ntfy_post)
     
     runner = web.AppRunner(app)
@@ -98,8 +102,10 @@ async def start_web_server():
     
     port = int(os.getenv("PORT", "8080"))
     site = web.TCPSite(runner, '0.0.0.0', port)
-    logger.info(f"Starting ntfy web server on port {port}")
+    
+    dc_bot_instance.logger.info(f"Starting web server on 0.0.0.0:{port}...")
     await site.start()
+    dc_bot_instance.logger.info("Web server is UP and running.")
     
     # Keep server running
     while True:
