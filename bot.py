@@ -475,6 +475,12 @@ def accounts_command(bot, accid, event):
         except Exception as e:
             reply += f"• Account ID: {aid} (Error reading: {e})\n\n"
             
+    try:
+        chat_info = bot.rpc.get_basic_chat_info(accid, msg.chat_id)
+        reply += f"chat_info: {chat_info}\n\n"
+    except Exception as e:
+        reply += f"chat_info error: {e}\n\n"
+        
     reply += "To delete an account, use: /rmaccount <id>\nNote: The bot now automatically routes messages to the correct account based on the chat ID."
     bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=reply))
 
