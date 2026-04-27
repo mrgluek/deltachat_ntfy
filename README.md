@@ -30,6 +30,45 @@ The bot supports the following `ntfy` Priority values:
 - 2, low: 🔵
 - 1, min: ⚪️
 
+### Advanced Features
+
+- **Header Aliases**: Use `t`/`ti` for Title, `p`/`prio` for Priority, `ta`/`tag` for Tags.
+- **Tags & Emojis 🥳**: Add emojis to your messages using the `Tags` header (e.g., `Tags: warning,skull`). Non-emoji tags are appended to the message text.
+- **Click Actions 🔗**: Use the `Click` header to add a clickable link to your notification.
+- **Attachments 📎**:
+  - **External URL**: Use `Attach: http://...` to have the bot download and send a file to the chat.
+  - **Direct Upload**: Use `curl -T file.jpg -H "Filename: file.jpg"` to upload a file directly as the message body.
+- **Group Support 👥**: Add the bot to any group and use `/sub <topic>` inside the group. The bot will appear to send messages on behalf of the topic (e.g., as `#topic`) using the `override_sender_name` feature.
+
+### Testing Examples
+
+Replace `http://localhost:8080` with your actual bot URL (e.g., `https://ntfy.gluek.info`).
+
+```bash
+# 1. Basic message with aliases
+curl -H "ti: Alert" -H "p: 5" -d "Critical error" http://localhost:8080/test
+
+# 2. Tags and Emojis
+curl -H "ta: warning,skull,fire" -d "Something is burning!" http://localhost:8080/test
+
+# 3. Clickable Link
+curl -H "Click: https://github.com" -d "Check the repo" http://localhost:8080/test
+
+# 4. External Attachment (URL)
+curl -H "Attach: https://github.com/fluidicon.png" -d "New avatar attached" http://localhost:8080/test
+
+# 5. Direct File Upload
+curl -T my_photo.jpg -H "Filename: photo.jpg" http://localhost:8080/test
+
+# 6. The "Ultimate" Test (Combined)
+curl -X POST http://localhost:8080/test \
+  -H "Title: System Status" \
+  -H "Tags: tada,rocket,check" \
+  -H "Click: https://status.example.com" \
+  -H "Attach: https://www.python.org/static/img/python-logo.png" \
+  -d "Everything is working perfectly! Check the attached logo and link."
+```
+
 ### Account Setup
 Before running the bot, you must initialize at least one Delta Chat account.
 
