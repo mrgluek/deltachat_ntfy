@@ -70,7 +70,7 @@ def parse_tags(tags_raw: str):
             text_tags.append(tag)
     return emojis, text_tags
 
-def format_notification(title: str, message: str, priority_raw: str, tags_raw: str) -> str:
+def format_notification(title: str, message: str, priority_raw: str, tags_raw: str, click_raw: str) -> str:
     priority_emoji = get_priority_emoji(priority_raw)
     emojis, text_tags = parse_tags(tags_raw)
     
@@ -90,6 +90,9 @@ def format_notification(title: str, message: str, priority_raw: str, tags_raw: s
     if text_tags:
         formatted += "\n\nTags: " + ", ".join(text_tags)
         
+    if click_raw:
+        formatted += f"\n\n🔗 [Open Link]({click_raw})"
+        
     return formatted
 
 async def handle_ntfy_post(request):
@@ -105,6 +108,7 @@ async def handle_ntfy_post(request):
     title = request.headers.get('Title') or request.headers.get('X-Title') or request.headers.get('ti') or request.headers.get('t', '')
     priority_raw = request.headers.get('Priority') or request.headers.get('X-Priority') or request.headers.get('prio') or request.headers.get('p', '3')
     tags_raw = request.headers.get('Tags') or request.headers.get('X-Tags') or request.headers.get('tag') or request.headers.get('ta', '')
+    click_raw = request.headers.get('Click') or request.headers.get('X-Click', '')
     
     # Handle JSON body (Uptime Kuma uses this)
     content_type = request.headers.get('Content-Type', '')
@@ -116,6 +120,7 @@ async def handle_ntfy_post(request):
             message = data.get('message', '')
             title = data.get('title', title)
             priority_raw = str(data.get('priority', priority_raw))
+            click_raw = data.get('click', click_raw)
             if 'tags' in data:
                 if isinstance(data['tags'], list):
                     tags_raw = ','.join(data['tags'])
@@ -141,7 +146,7 @@ async def handle_ntfy_post(request):
     # Broadcast to subscribers
     subscribers = database.get_subscribers(topic)
     if subscribers and dc_bot_instance and dc_accid is not None:
-        formatted_msg = format_notification(title, message, priority_raw, tags_raw)
+        formatted_msg = format_notification(title, message, priority_raw, tags_raw, click_raw)
         for dc_chat_id in subscribers:
             try:
                 dc_bot_instance.rpc.send_msg(dc_accid, dc_chat_id, MsgData(text=formatted_msg))
