@@ -11,7 +11,6 @@ services:
       - PORT=8080
       - DC_DB_DIR=/app/data
       - DB_PATH=/app/data/ntfy.db
-
   # caddy:
   #   image: caddy:latest
   #   restart: always
