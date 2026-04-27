@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  ntfy_bot:
+    build: .
+    restart: always
+    volumes:
+      - ./data:/app/data
+      - ./data/ntfybot:/root/.config/ntfybot
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+      - DC_DB_DIR=/app/data
+      - DB_PATH=/app/data/ntfy.db

@@ -1,0 +1,22 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environments
+.venv/
+venv/
+ENV/
+env/
+
+# Delta Chat / Project Data
+data/
+*.db
+*.session
+
+# IDEs
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
