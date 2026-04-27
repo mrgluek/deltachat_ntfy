@@ -115,17 +115,30 @@ def on_init(bot, args):
     accids = bot.rpc.get_all_account_ids()
     if accids:
         dc_accid = accids[0]
+        bot.logger.info(f"Setting up profile for account {dc_accid}...")
+        
+        # Set display name
         bot.rpc.set_config(dc_accid, "displayname", "Ntfy Bot")
-        bot.rpc.set_config(dc_accid, "selfstatus", "A Delta Chat bot that emulates a ntfy.sh backend to broadcast notifications from HTTP POST requests to Delta Chat users and groups: https://github.com/mrgluek/deltachat_ntfy")
+        
+        # Set status
+        status_text = "A Delta Chat bot that emulates a ntfy.sh backend to broadcast notifications from HTTP POST requests to Delta Chat users and groups: https://github.com/mrgluek/deltachat_ntfy"
+        bot.rpc.set_config(dc_accid, "selfstatus", status_text)
         
         # Set bot avatar if icon file exists
         try:
             base_dir = os.path.dirname(os.path.abspath(__file__))
             icon_path = os.path.join(base_dir, "icon.png")
             if os.path.exists(icon_path):
+                bot.logger.info(f"Icon found at {icon_path}, setting avatar...")
                 bot.rpc.set_config(dc_accid, "selfavatar", icon_path)
+            else:
+                bot.logger.warning(f"Icon NOT found at {icon_path}. Avatar will not be set.")
         except Exception as e:
-            bot.logger.warning(f"Could not set avatar: {e}")
+            bot.logger.error(f"Error setting avatar: {e}")
+        
+        bot.logger.info("Profile setup complete.")
+    else:
+        bot.logger.warning("No accounts found, skipping profile setup.")
     
     main_loop = asyncio.get_event_loop()
     main_loop.create_task(start_web_server())
@@ -144,11 +157,24 @@ def help_command(bot, accid, event):
         f"/unsub <topic> — Unsubscribe from a topic\n"
         f"/list — Show subscribed topics\n"
         f"/last — Show last 5 notifications from subscribed topics\n"
+        f"/donate — Support bot development ❤️\n"
         f"/help — Show this help message\n\n"
         f"Admin Commands:\n"
-        f"/initadmin — Claim bot ownership (if no admin is set)\n"
+        f"/initadmin — Claim bot ownership (if no admin is set)\n\n"
+        f"Run your own bot: https://github.com/mrgluek/deltachat_ntfy"
     )
     bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=help_text))
+
+@dc_cli.on(events.NewMessage(command="/donate"))
+def donate_command(bot, accid, event):
+    msg = event.msg
+    support_msg = (
+        "❤️ Support Bot Development\n\n"
+        "If you find this bot useful, you can support its development and server costs here:\n\n"
+        "🔗 https://web.tribute.tg/d/IWb\n\n"
+        "Thank you! 🙏"
+    )
+    bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=support_msg))
 
 @dc_cli.on(events.NewMessage(command="/initadmin"))
 def initadmin_command(bot, accid, event):
