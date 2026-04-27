@@ -69,7 +69,7 @@ def format_notification(title: str, message: str, priority_raw: str) -> str:
 async def handle_ntfy_post(request):
     # Log incoming request for debugging
     logger.info(f"Incoming POST to {request.path}")
-    logger.debug(f"Headers: {dict(request.headers)}")
+    logger.info(f"Headers: {dict(request.headers)}")
     
     topic = request.match_info.get('topic')
     if not topic:
