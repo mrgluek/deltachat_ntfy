@@ -30,25 +30,22 @@ The bot supports the following `ntfy` Priority values:
 - 2, low: 🔵
 - 1, min: ⚪️
 
-## Bot Configuration (Account Setup)
+### Account Setup
+Before running the bot, you must initialize at least one Delta Chat account.
 
-By default, the bot uses `deltabot-cli` which offers two ways to set up the Delta Chat account:
-
-### Automatic Setup (Recommended)
-On the first run, the bot will generate an onboarding QR code in the console. 
-- Use `docker-compose logs -f` to see the QR code.
-- Scan it with your Delta Chat mobile app.
-- A new account will be automatically created on a chatmail server.
-
-### Manual Setup (Custom Email/Password)
+**Manual Setup (Custom Email/Password)**
 If you want to use a specific email account:
 ```bash
-# Using Docker
-docker-compose exec ntfy_bot python bot.py init bot@example.com "YOUR_PASSWORD"
-
-# Manual run
-python bot.py init bot@example.com "YOUR_PASSWORD"
+docker-compose run --rm ntfy_bot python bot.py init bot@example.com "YOUR_PASSWORD"
 ```
+
+**Automatic Setup (Chatmail)**
+If you want to use a chatmail server (which doesn't require a pre-existing password for new accounts), choose a desired address at a chatmail domain (e.g., `nine.testrun.org`):
+```bash
+docker-compose run --rm ntfy_bot python bot.py init mybot@nine.testrun.org
+```
+
+Once configured, you can start the bot normally with `docker-compose up -d`.
 
 ## Running the Bot
 
