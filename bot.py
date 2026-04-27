@@ -116,7 +116,16 @@ def on_init(bot, args):
     if accids:
         dc_accid = accids[0]
         bot.rpc.set_config(dc_accid, "displayname", "Ntfy Bot")
-        bot.rpc.set_config(dc_accid, "selfstatus", "Send /help for commands.")
+        bot.rpc.set_config(dc_accid, "selfstatus", "A Delta Chat bot that emulates a ntfy.sh backend to broadcast notifications from HTTP POST requests to Delta Chat users and groups: https://github.com/mrgluek/deltachat_ntfy")
+        
+        # Set bot avatar if icon file exists
+        try:
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            icon_path = os.path.join(base_dir, "icon.png")
+            if os.path.exists(icon_path):
+                bot.rpc.set_config(dc_accid, "selfavatar", icon_path)
+        except Exception as e:
+            bot.logger.warning(f"Could not set avatar: {e}")
     
     main_loop = asyncio.get_event_loop()
     main_loop.create_task(start_web_server())
