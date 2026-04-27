@@ -67,13 +67,18 @@ def format_notification(title: str, message: str, priority_raw: str) -> str:
     return formatted
 
 async def handle_ntfy_post(request):
+    # Log incoming request for debugging
+    logger.info(f"Incoming POST to {request.path}")
+    logger.debug(f"Headers: {dict(request.headers)}")
+    
     topic = request.match_info.get('topic')
     if not topic:
-        # Fallback to headers (standard ntfy-sh behavior for some clients)
-        topic = request.headers.get('X-Topic') or request.headers.get('Topic')
+        # Fallback to headers or query params
+        topic = request.headers.get('X-Topic') or request.headers.get('Topic') or request.query.get('topic') or request.query.get('t')
     
     if not topic:
-        return web.Response(status=400, text="Topic required. Use /{topic} or Topic header.")
+        logger.warning(f"Request to {request.path} failed: Topic required")
+        return web.Response(status=400, text="Topic required. Use /{topic}, ?topic=... or Topic header.")
 
     title = request.headers.get('Title', '')
     priority_raw = request.headers.get('Priority', '3')
