@@ -252,25 +252,95 @@ async def handle_ntfy_post(request):
     return web.json_response({"id": "ntfy-compat", "time": int(time.time()), "event": "message", "topic": topic, "message": message})
 
 async def handle_index(request):
-    html = "<html><head><title>Delta Chat Ntfy Bot</title></head><body style='background:#111; color:#eee;'><pre>"
-    html += "Delta Chat Ntfy Bot is running! 🚀\n\nSend POST requests to /{topic} to broadcast notifications.\n\n"
+    html = """<!DOCTYPE html>
+<html>
+<head>
+    <title>Delta Chat Ntfy Bot</title>
+    <style>
+        body {
+            background-color: #22272e;
+            color: #adbac7;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+            margin: 0;
+            padding: 2rem;
+            display: flex;
+            justify-content: center;
+        }
+        .container {
+            background-color: #1c2128;
+            border-top: 5px solid #31958b;
+            border-radius: 4px;
+            padding: 2rem;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.2);
+            max-width: 800px;
+            width: 100%;
+        }
+        h1 {
+            color: #adbac7;
+            margin-top: 0;
+            font-size: 1.5rem;
+        }
+        code {
+            background-color: #22272e;
+            padding: 0.2rem 0.4rem;
+            border-radius: 3px;
+            font-family: ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, Liberation Mono, monospace;
+            font-size: 85%;
+        }
+        a {
+            color: #539bf5;
+            text-decoration: none;
+        }
+        a:hover {
+            text-decoration: underline;
+        }
+        .qr-wrapper {
+            margin-top: 1.5rem;
+            padding: 1rem;
+            background: #ffffff;
+            display: inline-block;
+            border-radius: 6px;
+        }
+        .qr-code {
+            background: transparent;
+            color: #000000;
+            padding: 0;
+            margin: 0;
+            font-family: monospace;
+            font-size: 12px;
+            line-height: 1;
+            letter-spacing: 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Delta Chat Ntfy Bot 🚀</h1>
+        <p>This server is running the Delta Chat Ntfy Bot. Send POST requests to <code>/{topic}</code> to broadcast notifications.</p>
+"""
     
     if dc_bot_instance and dc_accid is not None:
         try:
             qrdata = dc_bot_instance.rpc.get_config(dc_accid, "qr")
             if qrdata:
-                html += f"Add this bot to Delta Chat:\n<a href='{qrdata}' style='color:#58a6ff;'>{qrdata}</a>\n\n"
+                html += f"""
+        <p><strong>Add this bot to Delta Chat:</strong><br>
+        <a href="{qrdata}">{qrdata}</a></p>
+"""
                 if qrcode:
                     qr = qrcode.QRCode(version=1, box_size=1, border=2)
                     qr.add_data(qrdata)
                     qr.make(fit=True)
                     f = io.StringIO()
                     qr.print_ascii(out=f)
-                    html += f.getvalue()
+                    html += f'<div class="qr-wrapper"><pre class="qr-code">{f.getvalue()}</pre></div>'
         except Exception as e:
             pass
             
-    html += "</pre></body></html>"
+    html += """
+    </div>
+</body>
+</html>"""
     return web.Response(text=html, content_type="text/html")
 
 async def handle_robots(request):
