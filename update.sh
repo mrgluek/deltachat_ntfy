@@ -9,7 +9,7 @@ LOCAL=$(git rev-parse HEAD)
 REMOTE=$(git rev-parse @{u})
 
 FORCE=false
-if [[ "$1" == "-f" || "$1" == "--force" ]]; then
+if [ "$1" = "-f" ] || [ "$1" = "--force" ]; then
     FORCE=true
 fi
 
