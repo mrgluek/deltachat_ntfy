@@ -338,8 +338,8 @@ async def handle_index(request):
         </div>
         <p>This server is running the <a href="https://github.com/mrgluek/deltachat_ntfy">Delta Chat Ntfy Bot</a>.<br>
         <br>
-        Send POST requests to <code>/{topic}</code> to broadcast messages to Delta Chat:
-        <code>curl -d "Hello from ntfy" https://ntfy.gluek.info/{topic}</code></p>
+        Send POST requests to <code>topic</code> to send messages to Delta Chat:
+        <code>curl -d "Hello from ntfy" https://ntfy.gluek.info/test</code></p>
 """
     
     if dc_bot_instance:
