@@ -20,3 +20,7 @@ data/
 
 # OS files
 .DS_Store
+
+# Local configuration
+.env
+docker-compose.override.yml

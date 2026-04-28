@@ -12,7 +12,7 @@ services:
       - PORT=8080
       - DC_DB_DIR=/app/data
       - DB_PATH=/app/data/ntfy.db
-      - AUTH_TOKEN= # Set this to a secret string to enable authentication
+      - AUTH_TOKEN=${AUTH_TOKEN:-} # Can be set in a local .env file
   # caddy:
   #   image: caddy:latest
   #   restart: always
