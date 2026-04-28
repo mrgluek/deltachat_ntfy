@@ -108,7 +108,7 @@ def format_notification(title: str, message: str, priority_raw: str, tags_raw: s
 
     formatted = ""
     if is_private:
-        formatted += f"[{topic}]\n"
+        formatted += f"`[{topic}]` \n\n"
 
     if title:
         formatted += f"{emoji_prefix} **{title}**\n\n"
