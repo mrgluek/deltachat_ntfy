@@ -573,42 +573,57 @@ def on_start(bot, _args):
         except Exception as e:
             bot.logger.error(f"Failed to generate QR code: {e}")
 
-@dc_cli.on(events.NewMessage(command="/help"))
-def help_command(bot, accid, event):
-    msg = event.msg
-    contact = bot.rpc.get_contact(accid, msg.from_id)
+def get_help_text(bot, accid, from_id):
+    contact = bot.rpc.get_contact(accid, from_id)
     sender_email = contact.address
-    
     admin_email = database.get_config("admin_dc_email")
     
     help_text = (
         f"👋 Hi {sender_email}!\n\n"
         f"I'm the Ntfy Bot. I receive HTTP POST requests and broadcast them to subscribed topics.\n\n"
-        f"Commands:\n"
+        f"**Commands:**\n"
         f"/sub <topic> — Subscribe to a topic\n"
         f"/unsub <topic> — Unsubscribe from a topic\n"
         f"/list — Show subscribed topics\n"
-        f"/last — Show last 5 notifications from subscribed topics\n"
-        f"/newgroup [name] — Create a dedicated group chat for alerts\n"
+        f"/last — Show last 5 notifications\n"
+        f"/newgroup [name] — Create a dedicated group chat\n"
         f"/donate — Support bot development ❤️\n"
         f"/help — Show this help message\n\n"
     )
     
     if not admin_email:
         help_text += (
-            f"Initialisation Command:\n"
+            f"**Initialisation Command:**\n"
             f"/initadmin — Claim bot ownership (if no admin is set)\n\n"
         )
     elif admin_email.lower() == sender_email.lower():
         help_text += (
-            f"Admin Commands:\n"
+            f"**Admin Commands:**\n"
             f"/accounts — List configured bot accounts\n"
             f"/rmaccount <id> — Delete a bot account\n\n"
         )
         
     help_text += f"Run your own bot: https://github.com/mrgluek/deltachat_ntfy"
+    return help_text
 
+@dc_cli.on(events.NewMessage(command="/help"))
+def help_command(bot, accid, event):
+    msg = event.msg
+    help_text = get_help_text(bot, accid, msg.from_id)
     bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=help_text))
+
+@dc_cli.on(events.NewMessage)
+def on_new_message(bot, accid, event):
+    msg = event.msg
+    if msg.is_info:
+        return
+        
+    # If it's a contact request, send welcome message
+    if msg.is_contact_request:
+        bot.logger.info(f"New contact request from {msg.from_id} on account {accid}")
+        help_text = get_help_text(bot, accid, msg.from_id)
+        welcome_msg = f"👋 Welcome to Ntfy Bot!\n\n{help_text}"
+        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=welcome_msg))
 
 @dc_cli.on(events.NewMessage(command="/newgroup"))
 def newgroup_command(bot, accid, event):
