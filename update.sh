@@ -8,12 +8,21 @@ git fetch
 LOCAL=$(git rev-parse HEAD)
 REMOTE=$(git rev-parse @{u})
 
-if [ "$LOCAL" != "$REMOTE" ]; then
-    echo "🆕 New changes detected. Updating..."
-    git pull
+FORCE=false
+if [[ "$1" == "-f" || "$1" == "--force" ]]; then
+    FORCE=true
+fi
+
+if [ "$LOCAL" != "$REMOTE" ] || [ "$FORCE" = true ]; then
+    if [ "$FORCE" = true ]; then
+        echo "🔄 Force update requested."
+    else
+        echo "🆕 New changes detected. Updating..."
+        git pull
+    fi
     docker compose up -d --build
     docker image prune -f
-    echo "✅ Updated, restarted, and cleaned up old images."
+    echo "✅ Operation completed."
 else
-    echo "✅ Already up to date. No rebuild needed."
+    echo "✅ Already up to date. Use -f to force rebuild."
 fi
