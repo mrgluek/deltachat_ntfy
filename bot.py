@@ -340,7 +340,8 @@ async def handle_index(request):
         <br>
         Send POST requests to <code>topic</code> to send messages to Delta Chat:<br>
         <br>
-        <code>curl -d "Hello from ntfy" https://ntfy.gluek.info/test</code><br></p>
+        <code>curl -d "Hello from ntfy" https://ntfy.gluek.info/test</code><br>
+        <br></p>
 """
     
     if dc_bot_instance:
