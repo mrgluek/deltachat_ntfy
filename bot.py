@@ -618,19 +618,18 @@ def on_new_message(bot, accid, event):
     if msg.is_info:
         return
         
-    # If it's the first message in a private chat, send welcome message
+    # Detect new users in private chats and send welcome
     try:
-        chat = bot.rpc.get_basic_chat_info(accid, msg.chat_id)
-        if chat.chat_type == 'Single':
-            # Get list of all message IDs in this chat
-            msg_ids = bot.rpc.get_chat_msgs(accid, msg.chat_id)
-            if len(msg_ids) <= 1:
-                bot.logger.info(f"First message in chat {msg.chat_id}, sending welcome...")
+        chat_info = bot.rpc.get_basic_chat_info(accid, msg.chat_id)
+        if chat_info.get("type") == 1:  # Private chat
+            if not bot.rpc.get_contact_config(accid, msg.from_id, "greeted"):
+                bot.logger.info(f"New user detected, sending welcome to chat {msg.chat_id}")
                 help_text = get_help_text(bot, accid, msg.from_id)
                 welcome_msg = f"👋 Welcome to Ntfy Bot!\n\n{help_text}"
                 bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=welcome_msg))
+                bot.rpc.set_contact_config(accid, msg.from_id, "greeted", "1")
     except Exception as e:
-        bot.logger.error(f"Error checking for new chat: {e}")
+        bot.logger.error(f"Error in greeting check: {e}")
 
 @dc_cli.on(events.NewMessage(command="/newgroup"))
 def newgroup_command(bot, accid, event):
