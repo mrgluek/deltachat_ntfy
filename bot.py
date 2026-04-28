@@ -619,11 +619,15 @@ def on_new_message(bot, accid, event):
         return
         
     # If it's a contact request, send welcome message
-    if msg.is_contact_request:
-        bot.logger.info(f"New contact request from {msg.from_id} on account {accid}")
-        help_text = get_help_text(bot, accid, msg.from_id)
-        welcome_msg = f"👋 Welcome to Ntfy Bot!\n\n{help_text}"
-        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=welcome_msg))
+    try:
+        msg_info = bot.rpc.get_msg_info(accid, msg.id)
+        if msg_info.get('is_request'):
+            bot.logger.info(f"New contact request from {msg.from_id} on account {accid}")
+            help_text = get_help_text(bot, accid, msg.from_id)
+            welcome_msg = f"👋 Welcome to Ntfy Bot!\n\n{help_text}"
+            bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=welcome_msg))
+    except Exception as e:
+        bot.logger.error(f"Error checking for contact request: {e}")
 
 @dc_cli.on(events.NewMessage(command="/newgroup"))
 def newgroup_command(bot, accid, event):
