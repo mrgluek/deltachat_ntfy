@@ -336,7 +336,10 @@ async def handle_index(request):
             <img src="/icon.png" alt="Logo" class="logo">
             <h1>Delta Chat Ntfy Bot</h1>
         </div>
-        <p>This server is running the <a href="https://github.com/mrgluek/deltachat_ntfy">Delta Chat Ntfy Bot</a>. Send POST requests to <code>/{topic}</code> to broadcast notifications.</p>
+        <p>This server is running the <a href="https://github.com/mrgluek/deltachat_ntfy">Delta Chat Ntfy Bot</a>.<br>
+        <br>
+        Send POST requests to <code>/{topic}</code> to broadcast messages to Delta Chat:
+        <code>curl -d "Hello from ntfy" https://ntfy.gluek.info/{topic}</code></p>
 """
     
     if dc_bot_instance:
