@@ -618,16 +618,19 @@ def on_new_message(bot, accid, event):
     if msg.is_info:
         return
         
-    # If it's a contact request, send welcome message
+    # If it's the first message in a private chat, send welcome message
     try:
-        m = bot.rpc.get_message(accid, msg.id)
-        if m.is_request:
-            bot.logger.info(f"New contact request from {msg.from_id} on account {accid}")
-            help_text = get_help_text(bot, accid, msg.from_id)
-            welcome_msg = f"👋 Welcome to Ntfy Bot!\n\n{help_text}"
-            bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=welcome_msg))
+        chat = bot.rpc.get_basic_chat_info(accid, msg.chat_id)
+        if chat.chat_type == 'Single':
+            # Get list of all message IDs in this chat
+            msg_ids = bot.rpc.get_chat_msgs(accid, msg.chat_id)
+            if len(msg_ids) <= 1:
+                bot.logger.info(f"First message in chat {msg.chat_id}, sending welcome...")
+                help_text = get_help_text(bot, accid, msg.from_id)
+                welcome_msg = f"👋 Welcome to Ntfy Bot!\n\n{help_text}"
+                bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=welcome_msg))
     except Exception as e:
-        bot.logger.error(f"Error checking for contact request: {e}")
+        bot.logger.error(f"Error checking for new chat: {e}")
 
 @dc_cli.on(events.NewMessage(command="/newgroup"))
 def newgroup_command(bot, accid, event):
