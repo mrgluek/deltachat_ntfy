@@ -21,6 +21,7 @@ except ImportError:
     qrcode = None
 
 import emoji
+import collections
 
 # Initialize logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -32,6 +33,28 @@ bot_qr_cache = {} # Cache for secure join links to keep them stable on refresh
 # Global references
 dc_bot_instance = None
 dc_accid = None
+
+# Security settings
+AUTH_TOKEN = os.getenv("AUTH_TOKEN")
+RATE_LIMIT_WINDOW = 60 # seconds
+RATE_LIMIT_MAX = int(os.getenv("RATE_LIMIT_MAX", "30")) # messages per minute per IP
+rate_limit_cache = collections.defaultdict(list)
+
+def get_client_ip(request):
+    """Get real client IP, respecting X-Forwarded-For from Caddy."""
+    forwarded = request.headers.get("X-Forwarded-For")
+    if forwarded:
+        return forwarded.split(',')[0].strip()
+    return request.remote
+
+def is_rate_limited(ip):
+    """Simple rate limiter."""
+    now = time.time()
+    rate_limit_cache[ip] = [t for t in rate_limit_cache[ip] if now - t < RATE_LIMIT_WINDOW]
+    if len(rate_limit_cache[ip]) >= RATE_LIMIT_MAX:
+        return True
+    rate_limit_cache[ip].append(now)
+    return False
 
 def get_priority_emoji(priority_raw: str) -> str:
     priority_raw = str(priority_raw).lower()
@@ -106,11 +129,36 @@ def format_notification(title: str, message: str, priority_raw: str, tags_raw: s
     return formatted
 
 async def handle_ntfy_post(request):
+    topic = request.match_info.get('topic')
+    
+    # 1. Rate limiting
+    ip = get_client_ip(request)
+    if is_rate_limited(ip):
+        logger.warning(f"Rate limit exceeded for IP {ip}")
+        return web.Response(text="Rate limit exceeded. Try again later.", status=429)
+
+    # 2. Authentication
+    if AUTH_TOKEN:
+        auth_header = request.headers.get("Authorization")
+        token_from_query = request.query.get("auth")
+        token_from_header = request.headers.get("X-Auth-Token")
+        
+        valid = False
+        if auth_header == f"Bearer {AUTH_TOKEN}":
+            valid = True
+        elif token_from_query == AUTH_TOKEN:
+            valid = True
+        elif token_from_header == AUTH_TOKEN:
+            valid = True
+            
+        if not valid:
+            logger.warning(f"Unauthorized access attempt from IP {ip}")
+            return web.Response(text="Unauthorized. Please provide a valid AUTH_TOKEN.", status=401)
+
     # Log incoming request for debugging
     logger.info(f"Incoming POST to {request.path}")
     logger.info(f"Headers: {dict(request.headers)}")
     
-    topic = request.match_info.get('topic')
     if not topic:
         # Fallback to headers or query params
         topic = request.headers.get('X-Topic') or request.headers.get('Topic') or request.query.get('topic') or request.query.get('t')
