@@ -27,6 +27,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(level
 logger = logging.getLogger("ntfy_bot")
 
 dc_cli = BotCli("ntfybot")
+bot_qr_cache = {} # Cache for secure join links to keep them stable on refresh
 
 # Global references
 dc_bot_instance = None
@@ -357,8 +358,12 @@ async def handle_index(request):
                     pass
             
             if active_accid:
-                # Use the dedicated method to get the secure join link
-                qrdata = dc_bot_instance.rpc.get_chat_securejoin_qr_code(active_accid, None)
+                # Use cached QR link if available, otherwise generate new one
+                qrdata = bot_qr_cache.get(active_accid)
+                if not qrdata:
+                    qrdata = dc_bot_instance.rpc.get_chat_securejoin_qr_code(active_accid, None)
+                    bot_qr_cache[active_accid] = qrdata
+                
                 if qrdata:
                     html += f"""
         <p><a href="{qrdata}">Add this bot</a> to Delta Chat:</p>
