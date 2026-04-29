@@ -5,6 +5,7 @@ import json
 import os
 import threading
 import time
+import datetime
 import tempfile
 import urllib.parse
 
@@ -539,6 +540,79 @@ async def handle_ntfy_json(request):
             
     return response
 
+async def publish_stats():
+    topic = "stats"
+    title = "Daily Server Stats"
+    priority_int = 3
+    priority_raw = "3"
+    tags_raw = "bar_chart"
+    
+    last_24h = database.get_notifications_last_24h()
+    
+    message = f"📊 Ntfy Bot Statistics\n\nNotifications received in the last 24h: {last_24h}"
+    
+    # Save to database
+    database.add_notification(topic, title, message, priority_int)
+
+    # Pub/Sub push
+    if topic in listeners:
+        msg_payload = {
+            "id": f"ntfy-{int(time.time()*1000)}",
+            "time": int(time.time()),
+            "event": "message",
+            "topic": topic,
+            "message": message,
+            "title": title,
+            "priority": priority_int,
+            "tags": [tags_raw]
+        }
+        for q in listeners[topic]:
+            try:
+                q.put_nowait(msg_payload)
+            except asyncio.QueueFull:
+                pass
+
+    # Broadcast to subscribers
+    subscribers = database.get_subscribers(topic)
+    if subscribers and dc_bot_instance and dc_accid is not None:
+        for dc_chat_id in subscribers:
+            success = False
+            for acc_id in dc_bot_instance.rpc.get_all_account_ids():
+                is_private = True
+                try:
+                    chat_info = dc_bot_instance.rpc.get_basic_chat_info(acc_id, dc_chat_id)
+                    if isinstance(chat_info, dict):
+                        is_private = (chat_info.get("chat_type", "") == "Single" or chat_info.get("type", 1) == 1)
+                    else:
+                        is_private = (getattr(chat_info, "chat_type", "") == "Single" or getattr(chat_info, "type", 1) == 1)
+                except Exception:
+                    continue
+
+                try:
+                    formatted_msg = format_notification(title, message, priority_raw, tags_raw, "", topic, is_private)
+                    msg_data = MsgData(text=formatted_msg)
+                    if not is_private:
+                        msg_data.override_sender_name = f"#{topic}"
+                    dc_bot_instance.rpc.send_msg(acc_id, dc_chat_id, msg_data)
+                    success = True
+                    break
+                except Exception:
+                    break
+
+async def _stats_publisher_loop():
+    while True:
+        now = datetime.datetime.now()
+        next_midnight = (now + datetime.timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+        sleep_seconds = (next_midnight - now).total_seconds()
+        
+        logger.info(f"Stats publisher sleeping for {sleep_seconds} seconds until midnight.")
+        await asyncio.sleep(sleep_seconds)
+        
+        try:
+            await publish_stats()
+        except Exception as e:
+            logger.error(f"Failed to publish stats: {e}")
+
 async def _run_web_server():
     app = web.Application()
     app.router.add_get('/', handle_index)
@@ -566,6 +640,9 @@ async def _run_web_server():
     logger.info(f"Starting web server on 0.0.0.0:{port}...")
     await site.start()
     logger.info("Web server is UP and running.")
+    
+    # Start stats publisher
+    asyncio.create_task(_stats_publisher_loop())
     
     # Keep server running
     while True:

@@ -191,5 +191,14 @@ def get_messages_since(topic: str, since: str) -> list[dict]:
         rows = cursor.fetchall()
         conn.close()
         return [dict(r) for r in rows]
+def get_notifications_last_24h() -> int:
+    """Get the number of notifications received in the last 24 hours."""
+    with _lock:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM notifications WHERE created_at >= (CAST(strftime('%s','now') AS INTEGER) - 86400)")
+        count = cursor.fetchone()[0]
+        conn.close()
+        return count
 
 init_db()
