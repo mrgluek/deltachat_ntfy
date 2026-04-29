@@ -40,6 +40,10 @@ def init_db():
             )
         ''')
         
+        # Add indexes to prevent full table scans during cleanup
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_notifications_topic ON notifications(topic)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_notifications_created_at ON notifications(created_at)')
+        
         conn.commit()
         conn.close()
 
@@ -114,7 +118,12 @@ def add_notification(topic: str, title: str, message: str, priority: int):
             "INSERT INTO notifications (topic, title, message, priority) VALUES (?, ?, ?, ?)",
             (topic, title, message, priority)
         )
-        # Keep only the last 1000 notifications per topic to prevent unbounded growth
+        # Keep only notifications from the last 24 hours (86400 seconds)
+        cursor.execute('''
+            DELETE FROM notifications 
+            WHERE created_at < CAST(strftime('%s','now') AS INTEGER) - 86400
+        ''')
+        # Also keep only the last 1000 notifications per topic to prevent spam growth
         cursor.execute('''
             DELETE FROM notifications 
             WHERE topic = ? AND id NOT IN (
