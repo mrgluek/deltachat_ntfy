@@ -746,9 +746,14 @@ def get_help_text(bot, accid, from_id):
     sender_email = contact.address
     admin_email = database.get_config("admin_dc_email")
     
+    bot_url = database.get_config("bot_url") or "https://ntfy.gluek.info"
+    
     help_text = (
         f"👋 Hi {sender_email}!\n\n"
-        f"I'm the Ntfy Bot. I receive HTTP POST requests and broadcast them to subscribed topics.\n\n"
+        f"I'm the Ntfy Bot hosted at {bot_url}\n\n"
+        f"I receive HTTP POST requests and broadcast them to subscribed topics.\n\n"
+        f"Try me with `/sub test` and then send message with curl:\n"
+        f"`curl -d \"Hello from ntfy\" {bot_url}/test`\n\n"
         f"**Commands:**\n"
         f"/sub <topic> — Subscribe to a topic\n"
         f"/unsub <topic> — Unsubscribe from a topic\n"
@@ -769,7 +774,8 @@ def get_help_text(bot, accid, from_id):
         help_text += (
             f"**Admin Commands:**\n"
             f"/accounts — List configured bot accounts\n"
-            f"/rmaccount <id> — Delete a bot account\n\n"
+            f"/rmaccount <id> — Delete a bot account\n"
+            f"/url <url> — Set the bot's public URL\n\n"
         )
         
     help_text += f"Run your own bot: https://github.com/mrgluek/deltachat_ntfy"
@@ -982,6 +988,25 @@ def stats_command(bot, accid, event):
     
     reply = f"📊 **Ntfy Bot Statistics**\n\nNotifications received in the last 24h: {last_24h}"
     bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=reply))
+
+@dc_cli.on(events.NewMessage(command="/url"))
+def url_command(bot, accid, event):
+    msg = event.msg
+    contact = bot.rpc.get_contact(accid, msg.from_id)
+    sender_email = contact.address
+    
+    admin_email = database.get_config("admin_dc_email")
+    if not admin_email or admin_email.lower() != sender_email.lower():
+        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="❌ This command is only for the administrator."))
+        return
+        
+    url = event.payload.strip()
+    if not url:
+        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="❌ Usage: /url <https://your-bot-url.com>"))
+        return
+    
+    database.set_config("bot_url", url)
+    bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"✅ Bot URL updated to: {url}"))
 
 if __name__ == "__main__":
     import sys

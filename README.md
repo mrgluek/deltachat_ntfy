@@ -5,7 +5,9 @@ A bot for Delta Chat that emulates the backend of [ntfy.sh](https://ntfy.sh) and
 ## Usage
 
 Start the bot. Add it to Delta Chat. Message the bot:
+
 - `/initadmin` to claim bot ownership
+- `/url https://ntfy.gluek.info` to set the bot's public URL (admin only)
 - `/sub mytopic` to subscribe to the topic "mytopic"
 - `/unsub mytopic` to unsubscribe
 - `/list` to list your subscribed topics
@@ -26,6 +28,7 @@ curl -s "https://ntfy.gluek.info/mytopic/json?since=all&poll=1"
 # Fetch messages from the last 10 minutes (also supports s, h or unix timestamps)
 curl -s "https://ntfy.gluek.info/mytopic/json?since=10m"
 ```
+
 ### Sending notifications
 
 Use `curl` or any `ntfy` client and point it to your bot's web server URL.
@@ -39,6 +42,7 @@ curl -H 'Title: Backup Status' -H 'Priority: high' -d 'Backup successful 😀' h
 ```
 
 The bot supports the following `ntfy` Priority values:
+
 - 5, max, urgent: 🔴
 - 4, high: 🟠
 - 3, default: 🟢
@@ -85,16 +89,19 @@ curl -X POST https://ntfy.gluek.info/test \
 ```
 
 ### Account Setup
+
 Before running the bot, you must initialize at least one Delta Chat account.
 
 **Manual Setup (Custom Email/Password)**
 If you want to use a specific email account:
+
 ```bash
 docker compose run --rm ntfy_bot python bot.py init bot@example.com "YOUR_PASSWORD"
 ```
 
 **Automatic Setup (Chatmail)**
 If you want to use a chatmail server (which doesn't require a pre-existing password for new accounts), choose a desired address at a chatmail domain (e.g., `nine.testrun.org`):
+
 ```bash
 docker compose run --rm ntfy_bot python bot.py init mybot@nine.testrun.org
 ```
@@ -123,6 +130,7 @@ Once configured, you can start the bot normally with `docker compose up -d`.
 For production use with HTTPS, you can use the provided `Caddyfile` example. A `caddy` service is also included in `docker-compose.yml` (commented out by default).
 
 To use it:
+
 1. Edit `Caddyfile` with your domain name.
 2. Uncomment the `caddy` service in `docker-compose.yml`.
 3. Run `docker compose up -d`.

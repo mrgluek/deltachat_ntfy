@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Integrated a robust in-memory Pub/Sub mechanism to broadcast messages to connected HTTP clients in real-time.
 - **Bot Statistics**: 
   - Added the `/stats` command in Delta Chat to view the number of notifications received in the last 24 hours.
+  - Added the `/url` command for administrators to set the bot's public URL, which is now displayed in the `/help` message.
   - The bot now automatically publishes a daily statistics report (with 📊 tag) to the `stats` topic every day at midnight.
 
 ### Changed
