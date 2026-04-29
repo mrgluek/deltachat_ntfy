@@ -754,6 +754,7 @@ def get_help_text(bot, accid, from_id):
         f"/unsub <topic> — Unsubscribe from a topic\n"
         f"/list — Show subscribed topics\n"
         f"/last — Show last 5 notifications\n"
+        f"/stats — Show bot statistics\n"
         f"/newgroup [name] — Create a dedicated group chat\n"
         f"/donate — Support bot development ❤️\n"
         f"/help — Show this help message\n\n"
@@ -972,6 +973,15 @@ def last_command(bot, accid, event):
         lines.pop()
         
     bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="\n".join(lines)))
+
+@dc_cli.on(events.NewMessage(command="/stats"))
+def stats_command(bot, accid, event):
+    msg = event.msg
+    
+    last_24h = database.get_notifications_last_24h()
+    
+    reply = f"📊 **Ntfy Bot Statistics**\n\nNotifications received in the last 24h: {last_24h}"
+    bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=reply))
 
 if __name__ == "__main__":
     import sys
