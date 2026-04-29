@@ -10,7 +10,22 @@ Start the bot. Add it to Delta Chat. Message the bot:
 - `/unsub mytopic` to unsubscribe
 - `/list` to list your subscribed topics
 - `/last` to see the last 5 notifications from your subscribed topics
+- `/stats` to see the number of notifications received in the last 24 hours
 
+### API Subscription (JSON Stream)
+
+The bot supports the `ntfy` JSON stream API for programmatic subscriptions. You can use this to integrate with automated agents or scripts.
+
+```bash
+# Fetch all cached messages and stream new ones
+curl -s "https://ntfy.gluek.info/mytopic/json?since=all"
+
+# Only fetch historical messages, then disconnect
+curl -s "https://ntfy.gluek.info/mytopic/json?since=all&poll=1"
+
+# Fetch messages from the last 10 minutes (also supports s, h or unix timestamps)
+curl -s "https://ntfy.gluek.info/mytopic/json?since=10m"
+```
 ### Sending notifications
 
 Use `curl` or any `ntfy` client and point it to your bot's web server URL.
