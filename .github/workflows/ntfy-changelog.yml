@@ -1,0 +1,16 @@
+name: Notify ntfy
+on: [push]
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    container:
+      image: curlimages/curl:latest
+    steps:
+      - name: Send notification
+        run: |
+          curl -H "Title: ${{ github.event.head_commit.message }}" \
+               -H "Tags: robot,gear" \
+               -d "Автор: ${{ github.actor }}
+               Ссылка: ${{ github.event.head_commit.url }}" \
+               https://ntfy.gluek.info/changelog
