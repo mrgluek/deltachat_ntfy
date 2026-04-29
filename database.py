@@ -154,4 +154,42 @@ def get_recent_notifications(topics: list[str], limit: int = 5) -> list[dict]:
         conn.close()
         return [dict(r) for r in rows]
 
+def get_messages_since(topic: str, since: str) -> list[dict]:
+    """Get messages for a topic since a specific time or ID."""
+    with _lock:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        
+        query = "SELECT * FROM notifications WHERE topic = ?"
+        params = [topic]
+        
+        if since and since != 'all':
+            if since.endswith('m') and since[:-1].isdigit():
+                mins = int(since[:-1])
+                query += " AND created_at >= (CAST(strftime('%s','now') AS INTEGER) - ?)"
+                params.append(mins * 60)
+            elif since.endswith('h') and since[:-1].isdigit():
+                hours = int(since[:-1])
+                query += " AND created_at >= (CAST(strftime('%s','now') AS INTEGER) - ?)"
+                params.append(hours * 3600)
+            elif since.endswith('s') and since[:-1].isdigit():
+                secs = int(since[:-1])
+                query += " AND created_at >= (CAST(strftime('%s','now') AS INTEGER) - ?)"
+                params.append(secs)
+            elif since.isdigit():
+                val = int(since)
+                if val < 1000000000:
+                    query += " AND id > ?"
+                    params.append(val)
+                else:
+                    query += " AND created_at >= ?"
+                    params.append(val)
+                    
+        query += " ORDER BY id ASC"
+        cursor.execute(query, tuple(params))
+        rows = cursor.fetchall()
+        conn.close()
+        return [dict(r) for r in rows]
+
 init_db()

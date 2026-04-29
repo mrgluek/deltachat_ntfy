@@ -1,6 +1,7 @@
 import asyncio
 import io
 import logging
+import json
 import os
 import threading
 import time
@@ -39,6 +40,7 @@ AUTH_TOKEN = os.getenv("AUTH_TOKEN")
 RATE_LIMIT_WINDOW = 60 # seconds
 RATE_LIMIT_MAX = int(os.getenv("RATE_LIMIT_MAX", "30")) # messages per minute per IP
 rate_limit_cache = collections.defaultdict(list)
+listeners = collections.defaultdict(list) # Pub/Sub for JSON streams
 
 def get_client_ip(request):
     """Get real client IP, respecting X-Forwarded-For from Caddy."""
@@ -238,6 +240,27 @@ async def handle_ntfy_post(request):
     # Save to database
     priority_int = parse_priority(priority_raw)
     database.add_notification(topic, title, message, priority_int)
+
+    # Pub/Sub push
+    if topic in listeners:
+        msg_payload = {
+            "id": f"ntfy-{int(time.time()*1000)}",
+            "time": int(time.time()),
+            "event": "message",
+            "topic": topic,
+            "message": message
+        }
+        if title: msg_payload["title"] = title
+        if priority_int: msg_payload["priority"] = priority_int
+        if tags_raw: msg_payload["tags"] = [t.strip() for t in tags_raw.split(',') if t.strip()]
+        if click_raw: msg_payload["click"] = click_raw
+        if attach_url: msg_payload["attach"] = attach_url
+        
+        for q in listeners[topic]:
+            try:
+                q.put_nowait(msg_payload)
+            except asyncio.QueueFull:
+                pass
 
     # Broadcast to subscribers
     subscribers = database.get_subscribers(topic)
@@ -448,6 +471,73 @@ async def handle_static(request):
         return web.FileResponse(filename)
     return web.Response(status=404)
 
+async def handle_ntfy_json(request):
+    topic = request.match_info.get('topic')
+    since = request.query.get('since', '')
+    poll = request.query.get('poll', '0')
+    
+    response = web.StreamResponse(
+        status=200,
+        reason='OK',
+        headers={
+            'Content-Type': 'application/x-ndjson',
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'Access-Control-Allow-Origin': '*'
+        }
+    )
+    await response.prepare(request)
+    
+    # Send open event
+    open_event = {
+        "id": f"ntfy-{int(time.time()*1000)}",
+        "time": int(time.time()),
+        "event": "open",
+        "topic": topic
+    }
+    await response.write(json.dumps(open_event).encode('utf-8') + b'\n')
+    
+    # Send historical messages
+    if since:
+        historical = database.get_messages_since(topic, since)
+        for row in historical:
+            msg_payload = {
+                "id": str(row['id']),
+                "time": row['created_at'],
+                "event": "message",
+                "topic": topic,
+                "message": row['message']
+            }
+            if row['title']: msg_payload["title"] = row['title']
+            if row['priority']: msg_payload["priority"] = row['priority']
+            await response.write(json.dumps(msg_payload).encode('utf-8') + b'\n')
+            
+    if poll == '1':
+        return response
+        
+    # Enter streaming loop
+    q = asyncio.Queue()
+    listeners[topic].append(q)
+    try:
+        while True:
+            try:
+                msg = await asyncio.wait_for(q.get(), timeout=15.0)
+                await response.write(json.dumps(msg).encode('utf-8') + b'\n')
+            except asyncio.TimeoutError:
+                keepalive = {
+                    "id": f"ntfy-{int(time.time()*1000)}",
+                    "time": int(time.time()),
+                    "event": "keepalive",
+                    "topic": topic
+                }
+                await response.write(json.dumps(keepalive).encode('utf-8') + b'\n')
+    except asyncio.CancelledError:
+        pass
+    finally:
+        if q in listeners[topic]:
+            listeners[topic].remove(q)
+            
+    return response
 
 async def _run_web_server():
     app = web.Application()
@@ -465,6 +555,7 @@ async def _run_web_server():
     app.router.add_post('/{topic}', handle_ntfy_post)
     app.router.add_put('/', handle_ntfy_post)
     app.router.add_put('/{topic}', handle_ntfy_post)
+    app.router.add_get('/{topic}/json', handle_ntfy_json)
     
     runner = web.AppRunner(app)
     await runner.setup()
