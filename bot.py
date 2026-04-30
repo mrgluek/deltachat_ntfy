@@ -467,15 +467,13 @@ async def handle_topic_view(request):
     bot_url = database.get_config("bot_url") or "https://ntfy.gluek.info"
     topic_url = f"{bot_url.rstrip('/')}/{topic}"
     
-    bot_email = ""
+    # Get SecureJoin link (same as on index page)
+    subscribe_link = "#"
     if dc_bot_instance and dc_accid is not None:
         try:
-            bot_email = dc_bot_instance.rpc.get_config(dc_accid, "addr")
+            subscribe_link = dc_bot_instance.rpc.get_chat_securejoin_qr_code(dc_accid, None)
         except:
             pass
-            
-    # Pre-filled mailto link for subscription
-    subscribe_link = f"mailto:{bot_email}?body={topic_url}" if bot_email else "#"
     
     # URL parts for display
     parsed_url = urllib.parse.urlparse(bot_url)
