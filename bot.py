@@ -1049,12 +1049,14 @@ def get_help_text(bot, accid, from_id):
         f"**Commands:**\n"
         f"/sub <topic> — Subscribe to a topic\n"
         f"/unsub <topic> — Unsubscribe from a topic\n"
+        f"/send <topic> [**title**] <msg> — Post a message to a topic\n"
         f"/list — Show subscribed topics\n"
         f"/last — Show last 5 notifications\n"
         f"/stats — Show bot statistics\n"
         f"/newgroup [name] — Create a dedicated group chat\n"
         f"/donate — Support bot development ❤️\n"
         f"/help — Show this help message\n\n"
+        f"💡 _You can also reply to any notification to post back to its topic._\n\n"
     )
     
     if not admin_email:
@@ -1102,7 +1104,22 @@ def on_new_message(bot, accid, event):
                 bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"ℹ️ Already subscribed to '{topic}'"))
             return
 
-    # 2. Detect new users in private chats and send welcome
+    # 2. Reply-to-notification: if user replies to a bot message with [topic] prefix, post to that topic
+    try:
+        quote = getattr(msg, 'quote', None)
+        if quote and text and not text.startswith('/'):
+            quote_text = getattr(quote, 'text', '') or ''
+            # format_notification puts `[topic]` at the start for private chats
+            topic_match = re.match(r'^`\[(.+?)\]`', quote_text)
+            if topic_match:
+                reply_topic = topic_match.group(1)
+                _publish_from_chat(bot, accid, reply_topic, text, msg.chat_id)
+                bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"✅ Sent to `{reply_topic}`"))
+                return
+    except Exception as e:
+        bot.logger.error(f"Error in reply-to-notification check: {e}")
+
+    # 3. Detect new users in private chats and send welcome
     try:
         chat_info = bot.rpc.get_basic_chat_info(accid, msg.chat_id)
         
@@ -1122,6 +1139,112 @@ def on_new_message(bot, accid, event):
                 bot.rpc.set_contact_config(accid, msg.from_id, "greeted", "1")
     except Exception as e:
         bot.logger.error(f"Error in greeting check: {e}")
+
+def _publish_from_chat(bot, accid, topic, message, sender_chat_id, title=""):
+    """Publish a message to a topic from a Delta Chat command/reply.
+    Saves to DB, pushes to Pub/Sub listeners, and broadcasts to all subscribers.
+    """
+    priority_int = 3
+    priority_raw = "3"
+    tags_raw = ""
+    click_raw = ""
+
+    # Save to database
+    database.add_notification(topic, title, message, priority_int)
+
+    # Pub/Sub push for JSON streaming clients
+    if topic in listeners:
+        msg_payload = {
+            "id": f"ntfy-{int(time.time()*1000)}",
+            "time": int(time.time()),
+            "event": "message",
+            "topic": topic,
+            "message": message
+        }
+        if title:
+            msg_payload["title"] = title
+        for q in listeners[topic]:
+            try:
+                q.put_nowait(msg_payload)
+            except asyncio.QueueFull:
+                pass
+
+    # Broadcast to all subscribers
+    subscribers = database.get_subscribers(topic)
+    if subscribers and dc_bot_instance and dc_accid is not None:
+        for dc_chat_id in subscribers:
+            # Skip the sender's chat to avoid echo
+            if dc_chat_id == sender_chat_id:
+                continue
+
+            success = False
+            for acc_id in dc_bot_instance.rpc.get_all_account_ids():
+                is_private = True
+                try:
+                    chat_info = dc_bot_instance.rpc.get_basic_chat_info(acc_id, dc_chat_id)
+                    if isinstance(chat_info, dict):
+                        if "chat_type" in chat_info:
+                            is_private = (chat_info["chat_type"] == "Single")
+                        else:
+                            is_private = (chat_info.get("type", 1) == 1)
+                    else:
+                        if hasattr(chat_info, "chat_type"):
+                            is_private = (chat_info.chat_type == "Single")
+                        else:
+                            is_private = (getattr(chat_info, "type", 1) == 1)
+                except Exception:
+                    continue
+
+                try:
+                    formatted_msg = format_notification(title, message, priority_raw, tags_raw, click_raw, topic, is_private)
+                    msg_data = MsgData(text=formatted_msg)
+                    if not is_private:
+                        msg_data.override_sender_name = f"#{topic}"
+                    dc_bot_instance.rpc.send_msg(acc_id, dc_chat_id, msg_data)
+                    success = True
+                    break
+                except Exception as e:
+                    logger.error(f"_publish_from_chat: failed to send to {dc_chat_id} on {acc_id}: {e}")
+                    break
+
+            if not success:
+                logger.warning(f"_publish_from_chat: could not find chat {dc_chat_id} on any account.")
+
+
+@dc_cli.on(events.NewMessage(command="/send"))
+def send_command(bot, accid, event):
+    """Post a message to an ntfy topic: /send <topic> <message>"""
+    msg = event.msg
+    payload = event.payload.strip()
+
+    if not payload or " " not in payload:
+        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="Usage: /send <topic> [**title**] <message>"))
+        return
+
+    topic, rest = payload.split(" ", 1)
+    rest = rest.strip()
+    if not rest:
+        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="Usage: /send <topic> [**title**] <message>"))
+        return
+
+    # Parse optional **title** at the beginning
+    title = ""
+    title_match = re.match(r'^\*\*(.+?)\*\*\s*(.*)', rest, re.DOTALL)
+    if title_match:
+        title = title_match.group(1).strip()
+        message = title_match.group(2).strip()
+        if not message:
+            # Only title, no body — use title as message too
+            message = title
+    else:
+        message = rest
+
+    _publish_from_chat(bot, accid, topic, message, msg.chat_id, title=title)
+    confirm = f"✅ Sent to `{topic}`"
+    if title:
+        confirm += f" (title: {title})"
+    bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=confirm))
+
 
 @dc_cli.on(events.NewMessage(command="/newgroup"))
 def newgroup_command(bot, accid, event):
