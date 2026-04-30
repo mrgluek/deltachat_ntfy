@@ -457,6 +457,152 @@ async def handle_index(request):
 </html>"""
     return web.Response(text=html, content_type="text/html")
 
+async def handle_topic_view(request):
+    topic = request.match_info.get('topic')
+    
+    # Security: don't allow accessing hidden files or common requested files not in static list
+    if not topic or topic.startswith('.') or topic in ['favicon.ico', 'robots.txt']:
+        return web.Response(status=404)
+
+    notifications = database.get_recent_notifications([topic], limit=50)
+    
+    html = f"""<!DOCTYPE html>
+<html>
+<head>
+    <title>Topic: {topic} - Ntfy Bot</title>
+    <link rel="icon" type="image/png" href="/favicon-96x96.png" sizes="96x96" />
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body {{
+            background-color: #22272e;
+            color: #adbac7;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+            margin: 0;
+            padding: 2rem;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }}
+        .container {{
+            max-width: 800px;
+            width: 100%;
+        }}
+        .header {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 2rem;
+            border-bottom: 1px solid #444c56;
+            padding-bottom: 1rem;
+        }}
+        .header h1 {{
+            margin: 0;
+            font-size: 1.5rem;
+            color: #539bf5;
+        }}
+        .back-link {{
+            color: #768390;
+            text-decoration: none;
+            font-size: 0.9rem;
+        }}
+        .back-link:hover {{
+            color: #adbac7;
+        }}
+        .notification-list {{
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }}
+        .notification-card {{
+            background-color: #1c2128;
+            border: 1px solid #444c56;
+            border-radius: 6px;
+            padding: 1rem;
+            position: relative;
+            transition: transform 0.1s ease;
+        }}
+        .notification-card:hover {{
+            border-color: #768390;
+        }}
+        .priority-indicator {{
+            position: absolute;
+            left: 0;
+            top: 0;
+            bottom: 0;
+            width: 4px;
+            border-top-left-radius: 6px;
+            border-bottom-left-radius: 6px;
+        }}
+        .priority-5 {{ background-color: #f85149; }}
+        .priority-4 {{ background-color: #f0883e; }}
+        .priority-3 {{ background-color: #3fb950; }}
+        .priority-2 {{ background-color: #539bf5; }}
+        .priority-1 {{ background-color: #768390; }}
+        
+        .meta {{
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.8rem;
+            color: #768390;
+            margin-bottom: 0.5rem;
+        }}
+        .title {{
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+            display: block;
+            color: #adbac7;
+        }}
+        .message {{
+            line-height: 1.5;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }}
+        .empty-state {{
+            text-align: center;
+            padding: 4rem 0;
+            color: #768390;
+        }}
+        @media (max-width: 600px) {{
+            body {{ padding: 1rem; }}
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Topic: #{topic}</h1>
+            <a href="/" class="back-link">← All topics</a>
+        </div>
+        
+        <div class="notification-list">
+"""
+    if not notifications:
+        html += '<div class="empty-state">No notifications found for this topic in the last 24 hours.</div>'
+    else:
+        for n in notifications:
+            dt = datetime.datetime.fromtimestamp(n['created_at']).strftime('%Y-%m-%d %H:%M:%S')
+            priority = n['priority'] or 3
+            priority_emoji = get_priority_emoji(str(priority))
+            
+            html += f"""
+            <div class="notification-card">
+                <div class="priority-indicator priority-{priority}"></div>
+                <div class="meta">
+                    <span>{priority_emoji} Priority {priority}</span>
+                    <span>{dt}</span>
+                </div>
+                {f'<span class="title">{n["title"]}</span>' if n['title'] else ''}
+                <div class="message">{n['message']}</div>
+            </div>
+"""
+            
+    html += """
+        </div>
+    </div>
+</body>
+</html>"""
+    return web.Response(text=html, content_type="text/html")
+
 async def handle_robots(request):
     return web.Response(text="User-agent: *\nDisallow: /\n", content_type="text/plain")
 
@@ -630,6 +776,7 @@ async def _run_web_server():
     app.router.add_put('/', handle_ntfy_post)
     app.router.add_put('/{topic}', handle_ntfy_post)
     app.router.add_get('/{topic}/json', handle_ntfy_json)
+    app.router.add_get('/{topic}', handle_topic_view)
     
     runner = web.AppRunner(app)
     await runner.setup()
