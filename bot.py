@@ -422,11 +422,12 @@ async def handle_index(request):
         <p>This server is running the <a href="https://github.com/mrgluek/deltachat_ntfy">Delta Chat Ntfy Bot</a>.<br>
         <br>
         <b>Quick start:</b><br>
+        <br>
         1. Send POST requests to any topic (e.g. <code>test</code>) to send messages to Delta Chat:<br>
         <br>
         <code>curl -d "Hello from ntfy" SERVER_URL/test</code><br>
         <br>
-        2.Check it live at: <a href="SERVER_URL/test">SERVER_URL/test</a><br>
+        2. Check it live at: <a href="SERVER_URL/test">SERVER_URL/test</a><br>
         <br>
         </p>
 """
