@@ -687,6 +687,7 @@ async def handle_topic_view(request):
         
         <div class="notification-list">
 """
+    server_tz = datetime.datetime.now().astimezone().tzname()
     if not notifications:
         html += '<div class="empty-state">No notifications found for this topic in the last 24 hours.</div>'
     else:
@@ -701,7 +702,7 @@ async def handle_topic_view(request):
                 <div class="priority-indicator priority-{priority}"></div>
                 <div class="meta">
                     <span>{priority_emoji} Priority {priority}</span>
-                    <span>{dt}</span>
+                    <span title="Server Timezone: {server_tz}">{dt}</span>
                 </div>
                 {f'<span class="title">{n["title"]}</span>' if n['title'] else ''}
                 <div class="message">{n['message']}</div>
@@ -709,6 +710,7 @@ async def handle_topic_view(request):
             </div>
 """
             
+
     html += f"""
         </div>
     </div>
