@@ -333,6 +333,7 @@ async def handle_ntfy_post(request):
     return web.json_response({"id": "ntfy-compat", "time": int(time.time()), "event": "message", "topic": topic, "message": message})
 
 async def handle_index(request):
+    bot_url = database.get_config("bot_url") or "https://ntfy.gluek.info"
     html = """<!DOCTYPE html>
 <html>
 <head>
@@ -351,7 +352,8 @@ async def handle_index(request):
             margin: 0;
             padding: 2rem;
             display: flex;
-            justify-content: center;
+            flex-direction: column;
+            align-items: center;
         }
         .container {
             background-color: #1c2128;
@@ -419,11 +421,15 @@ async def handle_index(request):
         </div>
         <p>This server is running the <a href="https://github.com/mrgluek/deltachat_ntfy">Delta Chat Ntfy Bot</a>.<br>
         <br>
-        Send POST requests to <code>topic</code> to send messages to Delta Chat:<br>
+        Send POST requests to topic (<code>test</code>) to send messages to Delta Chat:<br>
         <br>
-        <code>curl -d "Hello from ntfy" https://ntfy.gluek.info/test</code><br>
-        <br></p>
+        <code>curl -d "Hello from ntfy" SERVER_URL/test</code><br>
+        <br>
+        Check it live at: <a href="SERVER_URL/test">SERVER_URL/test</a><br>
+        <br>
+        </p>
 """
+    html = html.replace("SERVER_URL", bot_url.rstrip('/'))
     
     if dc_bot_instance:
         try:
