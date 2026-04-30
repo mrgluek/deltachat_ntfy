@@ -793,10 +793,35 @@ def on_new_message(bot, accid, event):
     if msg.is_info:
         return
         
-    # Detect new users in private chats and send welcome
+    text = (msg.text or "").strip()
+    
+    # 1. URL detection for subscription (e.g. https://ntfy.gluek.info/topic)
+    bot_url = database.get_config("bot_url") or "https://ntfy.gluek.info"
+    base_url = bot_url.rstrip('/')
+    
+    if text.startswith(base_url + "/"):
+        topic = text[len(base_url)+1:].strip()
+        # Basic validation: topic should not have spaces or further slashes
+        if topic and " " not in topic and "/" not in topic:
+            if database.subscribe(msg.chat_id, topic):
+                bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"✅ Subscribed to '{topic}' via link"))
+                bot.logger.info(f"Subscribed chat {msg.chat_id} to '{topic}' via URL detection")
+            else:
+                bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"ℹ️ Already subscribed to '{topic}'"))
+            return
+
+    # 2. Detect new users in private chats and send welcome
     try:
         chat_info = bot.rpc.get_basic_chat_info(accid, msg.chat_id)
-        if chat_info.get("type") == 1:  # Private chat
+        
+        # Safe check for chat type
+        is_private = False
+        if isinstance(chat_info, dict):
+            is_private = (chat_info.get("type") == 1)
+        else:
+            is_private = (getattr(chat_info, "type", 1) == 1)
+            
+        if is_private:
             if not bot.rpc.get_contact_config(accid, msg.from_id, "greeted"):
                 bot.logger.info(f"New user detected, sending welcome to chat {msg.chat_id}")
                 help_text = get_help_text(bot, accid, msg.from_id)
