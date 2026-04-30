@@ -476,6 +476,10 @@ async def handle_topic_view(request):
             
     # Pre-filled mailto link for subscription
     subscribe_link = f"mailto:{bot_email}?body={topic_url}" if bot_email else "#"
+    
+    # URL parts for display
+    parsed_url = urllib.parse.urlparse(bot_url)
+    display_host = parsed_url.netloc or "ntfy.gluek.info"
 
     notifications = database.get_recent_notifications([topic], limit=50)
     
@@ -510,10 +514,38 @@ async def handle_topic_view(request):
             border-bottom: 1px solid #444c56;
             padding-bottom: 1rem;
         }}
-        .header h1 {{
-            margin: 0;
-            font-size: 1.5rem;
+        .topic-path {{
+            font-size: 1.2rem;
+            font-weight: 500;
+            display: flex;
+            align-items: center;
+            gap: 0.2rem;
+        }}
+        .home-link {{
+            color: #768390;
+            text-decoration: none;
+        }}
+        .home-link:hover {{
             color: #539bf5;
+        }}
+        .topic-name {{
+            color: #adbac7;
+        }}
+        .actions {{
+            display: flex;
+            align-items: center;
+            gap: 0.8rem;
+        }}
+        .copy-btn-inline {{
+            cursor: pointer;
+            font-size: 0.9rem;
+            opacity: 0.4;
+            transition: opacity 0.2s;
+            user-select: none;
+            padding: 4px;
+        }}
+        .copy-btn-inline:hover {{
+            opacity: 1;
         }}
         .btn-subscribe {{
             background-color: #31958b;
@@ -538,7 +570,7 @@ async def handle_topic_view(request):
             border: 1px solid #444c56;
             border-radius: 6px;
             padding: 1rem;
-            padding-right: 2.5rem; /* Space for copy button */
+            padding-right: 2.5rem;
             position: relative;
             transition: border-color 0.1s ease;
         }}
@@ -615,9 +647,20 @@ async def handle_topic_view(request):
         }}
         @media (max-width: 600px) {{
             body {{ padding: 1rem; }}
+            .topic-path {{ font-size: 1rem; }}
         }}
     </style>
     <script>
+        function copyText(text, btnElem) {{
+            navigator.clipboard.writeText(text).then(() => {{
+                const oldIcon = btnElem.innerText;
+                btnElem.innerText = '✅';
+                setTimeout(() => {{ btnElem.innerText = oldIcon; }}, 1500);
+            }}).catch(err => {{
+                console.error('Could not copy text: ', err);
+            }});
+        }}
+        
         function copyNotif(id) {{
             const card = document.getElementById('notif-' + id);
             const titleElem = card.querySelector('.title');
@@ -627,22 +670,21 @@ async def handle_topic_view(request):
             const message = msgElem ? msgElem.innerText : '';
             const fullText = title ? (title + '\\n' + message) : message;
             
-            navigator.clipboard.writeText(fullText).then(() => {{
-                const btn = card.querySelector('.copy-btn');
-                const oldIcon = btn.innerText;
-                btn.innerText = '✅';
-                setTimeout(() => {{ btn.innerText = oldIcon; }}, 1500);
-            }}).catch(err => {{
-                console.error('Could not copy text: ', err);
-            }});
+            copyText(fullText, card.querySelector('.copy-btn'));
         }}
     </script>
 </head>
 <body>
     <div class="container">
         <div class="header">
-            <h1>#{topic}</h1>
-            <a href="{subscribe_link}" class="btn-subscribe">Subscribe in Delta Chat</a>
+            <div class="topic-path">
+                <a href="{bot_url}" class="home-link">{display_host}</a>/<span class="topic-name">{topic}</span>
+                <span class="copy-btn-inline" onclick="copyText('{topic_url}', this)" title="Copy URL">📋</span>
+            </div>
+            <div class="actions">
+                <span class="copy-btn-inline" onclick="copyText('/sub {topic}', this)" title="Copy '/sub {topic}' command">📋</span>
+                <a href="{subscribe_link}" class="btn-subscribe">Subscribe</a>
+            </div>
         </div>
         
         <div class="notification-list">
