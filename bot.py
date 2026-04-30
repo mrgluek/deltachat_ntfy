@@ -429,6 +429,10 @@ async def handle_index(request):
         <br>
         2. Check it live at: <a href="SERVER_URL/test">SERVER_URL/test</a><br>
         <br>
+        More topics to try: 
+        <a href="SERVER_URL/stats">stats</a>, 
+        <a href="SERVER_URL/changelog">changelog</a>, 
+        <a href="SERVER_URL/announcements">announcements</a>
         </p>
 """
     html = html.replace("SERVER_URL", bot_url.rstrip('/'))
