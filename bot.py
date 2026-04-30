@@ -60,18 +60,24 @@ def is_rate_limited(ip):
     return False
 
 def get_priority_emoji(priority_raw: str) -> str:
-    priority_raw = str(priority_raw).lower()
-    if priority_raw in ("5", "max", "urgent"):
-        return "🔴"
-    elif priority_raw in ("4", "high"):
-        return "🟠"
-    elif priority_raw in ("3", "default"):
-        return "🟢"
-    elif priority_raw in ("2", "low"):
-        return "🔵"
-    elif priority_raw in ("1", "min"):
-        return "⚪️"
-    return "🟢" # default
+    priority_map = {
+        "5": "🚨", "max": "🚨", "urgent": "🚨",
+        "4": "⚠️", "high": "⚠️",
+        "3": "✅", "default": "✅", "": "✅",
+        "2": "ℹ️", "low": "ℹ️",
+        "1": "💤", "min": "💤"
+    }
+    return priority_map.get(str(priority_raw).lower(), "✅")
+
+def linkify(text):
+    """Escape HTML and wrap URLs in <a> tags."""
+    if not text:
+        return ""
+    # Escape HTML to prevent XSS
+    text = html.escape(text)
+    # Wrap URLs
+    url_pattern = re.compile(r'(https?://[^\s<>"]+)')
+    return url_pattern.sub(r'<a href="\1" target="_blank" rel="noopener noreferrer">\1</a>', text)
 
 def parse_priority(priority_raw: str) -> int:
     priority_raw = str(priority_raw).lower()
@@ -643,6 +649,13 @@ async def handle_topic_view(request):
         .footer a:hover {{
             text-decoration: underline;
         }}
+        .message a {{
+            color: #539bf5;
+            text-decoration: none;
+        }}
+        .message a:hover {{
+            text-decoration: underline;
+        }}
         @media (max-width: 600px) {{
             body {{ padding: 1rem; }}
             .topic-path {{ font-size: 1rem; }}
@@ -704,8 +717,8 @@ async def handle_topic_view(request):
                     <span>{priority_emoji} Priority {priority}</span>
                     <span title="Server Timezone: {server_tz}">{dt}</span>
                 </div>
-                {f'<span class="title">{n["title"]}</span>' if n['title'] else ''}
-                <div class="message">{n['message']}</div>
+                {f'<span class="title">{linkify(n["title"])}</span>' if n['title'] else ''}
+                <div class="message">{linkify(n['message'])}</div>
                 <span class="copy-btn" onclick="copyNotif({notif_id})" title="Copy to clipboard">📋</span>
             </div>
 """
