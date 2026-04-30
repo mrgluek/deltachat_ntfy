@@ -823,7 +823,7 @@ async def handle_ntfy_json(request):
                     "topic": topic
                 }
                 await response.write(json.dumps(keepalive).encode('utf-8') + b'\n')
-    except asyncio.CancelledError:
+    except (asyncio.CancelledError, ConnectionError, aiohttp.ClientConnectionResetError):
         pass
     finally:
         if q in listeners[topic]:
