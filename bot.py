@@ -421,11 +421,12 @@ async def handle_index(request):
         </div>
         <p>This server is running the <a href="https://github.com/mrgluek/deltachat_ntfy">Delta Chat Ntfy Bot</a>.<br>
         <br>
-        Send POST requests to topic (<code>test</code>) to send messages to Delta Chat:<br>
+        <b>Quick start:</b><br>
+        1. Send POST requests to any topic (e.g. <code>test</code>) to send messages to Delta Chat:<br>
         <br>
         <code>curl -d "Hello from ntfy" SERVER_URL/test</code><br>
         <br>
-        Check it live at: <a href="SERVER_URL/test">SERVER_URL/test</a><br>
+        2.Check it live at: <a href="SERVER_URL/test">SERVER_URL/test</a><br>
         <br>
         </p>
 """
@@ -452,7 +453,7 @@ async def handle_index(request):
                 
                 if qrdata:
                     html += f"""
-        <p><a href="{qrdata}">Add this bot</a> to Delta Chat:</p>
+        <p>3. <a href="{qrdata}">Add this bot</a> to Delta Chat and send <code>/help</code> to see available commands:</p>
 """
                     if qrcode:
                         qr = qrcode.QRCode(version=1, box_size=1, border=2)
