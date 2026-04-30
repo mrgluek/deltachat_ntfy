@@ -423,7 +423,7 @@ async def handle_index(request):
         <br>
         <b>Quick start:</b><br>
         <br>
-        1. Send POST requests to any topic (e.g. <code>test</code>) to send messages to Delta Chat:<br>
+        1. Send POST requests to any topic (e.g. <code>test</code>) to send alert to all topic subscribers in Delta Chat:<br>
         <br>
         <code>curl -d "Hello from ntfy" SERVER_URL/test</code><br>
         <br>
