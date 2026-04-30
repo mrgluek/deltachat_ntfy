@@ -464,6 +464,19 @@ async def handle_topic_view(request):
     if not topic or topic.startswith('.') or topic in ['favicon.ico', 'robots.txt']:
         return web.Response(status=404)
 
+    bot_url = database.get_config("bot_url") or "https://ntfy.gluek.info"
+    topic_url = f"{bot_url.rstrip('/')}/{topic}"
+    
+    bot_email = ""
+    if dc_bot_instance and dc_accid is not None:
+        try:
+            bot_email = dc_bot_instance.rpc.get_config(dc_accid, "addr")
+        except:
+            pass
+            
+    # Pre-filled mailto link for subscription
+    subscribe_link = f"mailto:{bot_email}?body={topic_url}" if bot_email else "#"
+
     notifications = database.get_recent_notifications([topic], limit=50)
     
     html = f"""<!DOCTYPE html>
@@ -482,10 +495,12 @@ async def handle_topic_view(request):
             display: flex;
             flex-direction: column;
             align-items: center;
+            min-height: 100vh;
         }}
         .container {{
             max-width: 800px;
             width: 100%;
+            flex: 1;
         }}
         .header {{
             display: flex;
@@ -500,13 +515,18 @@ async def handle_topic_view(request):
             font-size: 1.5rem;
             color: #539bf5;
         }}
-        .back-link {{
-            color: #768390;
+        .btn-subscribe {{
+            background-color: #31958b;
+            color: white;
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
             text-decoration: none;
+            font-weight: 600;
             font-size: 0.9rem;
+            transition: background-color 0.2s;
         }}
-        .back-link:hover {{
-            color: #adbac7;
+        .btn-subscribe:hover {{
+            background-color: #3aa69a;
         }}
         .notification-list {{
             display: flex;
@@ -518,8 +538,9 @@ async def handle_topic_view(request):
             border: 1px solid #444c56;
             border-radius: 6px;
             padding: 1rem;
+            padding-right: 2.5rem; /* Space for copy button */
             position: relative;
-            transition: transform 0.1s ease;
+            transition: border-color 0.1s ease;
         }}
         .notification-card:hover {{
             border-color: #768390;
@@ -557,21 +578,71 @@ async def handle_topic_view(request):
             white-space: pre-wrap;
             word-break: break-word;
         }}
+        .copy-btn {{
+            position: absolute;
+            right: 0.8rem;
+            bottom: 0.8rem;
+            cursor: pointer;
+            font-size: 1.1rem;
+            opacity: 0.3;
+            transition: opacity 0.2s, transform 0.1s;
+            user-select: none;
+        }}
+        .copy-btn:hover {{
+            opacity: 1;
+            transform: scale(1.15);
+        }}
         .empty-state {{
             text-align: center;
             padding: 4rem 0;
             color: #768390;
         }}
+        .footer {{
+            margin-top: 4rem;
+            padding: 2rem 0;
+            border-top: 1px solid #444c56;
+            text-align: center;
+            font-size: 0.85rem;
+            color: #768390;
+            width: 100%;
+        }}
+        .footer a {{
+            color: #539bf5;
+            text-decoration: none;
+        }}
+        .footer a:hover {{
+            text-decoration: underline;
+        }}
         @media (max-width: 600px) {{
             body {{ padding: 1rem; }}
         }}
     </style>
+    <script>
+        function copyNotif(id) {{
+            const card = document.getElementById('notif-' + id);
+            const titleElem = card.querySelector('.title');
+            const msgElem = card.querySelector('.message');
+            
+            const title = titleElem ? titleElem.innerText : '';
+            const message = msgElem ? msgElem.innerText : '';
+            const fullText = title ? (title + '\\n' + message) : message;
+            
+            navigator.clipboard.writeText(fullText).then(() => {{
+                const btn = card.querySelector('.copy-btn');
+                const oldIcon = btn.innerText;
+                btn.innerText = '✅';
+                setTimeout(() => {{ btn.innerText = oldIcon; }}, 1500);
+            }}).catch(err => {{
+                console.error('Could not copy text: ', err);
+            }});
+        }}
+    </script>
 </head>
 <body>
     <div class="container">
         <div class="header">
-            <h1>Topic: #{topic}</h1>
-            <a href="/" class="back-link">← All topics</a>
+            <h1>#{topic}</h1>
+            <a href="{subscribe_link}" class="btn-subscribe">Subscribe in Delta Chat</a>
         </div>
         
         <div class="notification-list">
@@ -583,9 +654,10 @@ async def handle_topic_view(request):
             dt = datetime.datetime.fromtimestamp(n['created_at']).strftime('%Y-%m-%d %H:%M:%S')
             priority = n['priority'] or 3
             priority_emoji = get_priority_emoji(str(priority))
+            notif_id = n['id']
             
             html += f"""
-            <div class="notification-card">
+            <div class="notification-card" id="notif-{notif_id}">
                 <div class="priority-indicator priority-{priority}"></div>
                 <div class="meta">
                     <span>{priority_emoji} Priority {priority}</span>
@@ -593,11 +665,15 @@ async def handle_topic_view(request):
                 </div>
                 {f'<span class="title">{n["title"]}</span>' if n['title'] else ''}
                 <div class="message">{n['message']}</div>
+                <span class="copy-btn" onclick="copyNotif({notif_id})" title="Copy to clipboard">📋</span>
             </div>
 """
             
-    html += """
+    html += f"""
         </div>
+    </div>
+    <div class="footer">
+        <a href="{bot_url}">This server</a> is running the <a href="https://github.com/mrgluek/deltachat_ntfy">Delta Chat Ntfy Bot</a>.
     </div>
 </body>
 </html>"""
