@@ -1042,6 +1042,42 @@ def on_start(bot, _args):
         except Exception as e:
             bot.logger.error(f"Failed to generate QR code: {e}")
 
+def _get_contact_fingerprint(bot, accid, contact_id):
+    """Returns the cryptographic fingerprint of a contact, with fallback to parsing encryption info."""
+    try:
+        # 1. Try direct config (fastest/cleanest)
+        fp = bot.rpc.get_contact_config(accid, contact_id, "fp")
+        if fp:
+            return fp.upper()
+            
+        # 2. Fallback: Parse from encryption info
+        enc_info = bot.rpc.get_contact_encryption_info(accid, contact_id)
+        if enc_info:
+            all_blocks = []
+            current_block = []
+            for line in enc_info.splitlines():
+                stripped = line.strip()
+                is_hex_line = (
+                    stripped 
+                    and len(stripped) > 8 
+                    and all(c in '0123456789abcdefABCDEF ' for c in stripped)
+                )
+                if is_hex_line:
+                    current_block.append(stripped.replace(' ', ''))
+                else:
+                    if current_block:
+                        all_blocks.append(''.join(current_block))
+                        current_block = []
+            if current_block:
+                all_blocks.append(''.join(current_block))
+            
+            if all_blocks:
+                # The last hex block in encryption info is usually the contact's fingerprint
+                return all_blocks[-1].upper()
+    except Exception:
+        pass
+    return None
+
 def _is_dc_admin(bot, accid, contact_id):
     """Check if the given contact is the bot administrator (by email or fingerprint)."""
     try:
@@ -1051,18 +1087,13 @@ def _is_dc_admin(bot, accid, contact_id):
         # 1. Check fingerprint (strongest)
         admin_fp = database.get_admin_fingerprint()
         if admin_fp:
-            # Get contact fingerprint
-            try:
-                c_fp = bot.rpc.get_contact_config(accid, contact_id, "fp")
-                if c_fp and c_fp == admin_fp:
-                    return True
-            except Exception:
-                pass
+            c_fp = _get_contact_fingerprint(bot, accid, contact_id)
+            if c_fp and c_fp == admin_fp:
+                return True
         
         # 2. Check email (legacy or initial setup)
         admin_email = database.get_config("admin_dc_email")
         if admin_email and admin_email.lower() == sender_email.lower():
-            # If we don't have a fingerprint yet, this is a good time to upgrade!
             return True
             
     except Exception as e:
@@ -1354,14 +1385,8 @@ def initadmin_command(bot, accid, event):
     admin_fp = database.get_admin_fingerprint()
     
     # Get sender fingerprint
-    short_fp = "unknown"
-    full_fp = None
-    try:
-        full_fp = bot.rpc.get_contact_config(accid, msg.from_id, "fp")
-        if full_fp:
-            short_fp = full_fp[-8:].upper()
-    except Exception:
-        pass
+    full_fp = _get_contact_fingerprint(bot, accid, msg.from_id)
+    short_fp = full_fp[-8:].upper() if full_fp else "unknown"
 
     if admin_email or admin_fp:
         # If already admin by email, but fingerprint is missing, upgrade it
