@@ -13,6 +13,8 @@ Start the bot. Add it to Delta Chat. Message the bot:
 - `/list` to list your subscribed topics
 - `/last` to see the last 5 notifications from your subscribed topics
 - `/stats` to see the number of notifications received in the last 24 hours
+- `/transports` to show configured mail relays and statistics (admin only)
+- `/help` to see all available commands
 
 ### API Subscription (JSON Stream)
 
@@ -107,6 +109,19 @@ docker compose run --rm ntfy_bot python bot.py init mybot@nine.testrun.org
 ```
 
 Once configured, you can start the bot normally with `docker compose up -d`.
+
+**Backup Relays (Multi-transport)**
+You can add secondary mail servers to ensure the bot remains reachable if your primary server goes down:
+
+```bash
+# Add a backup chatmail via URI
+docker compose run --rm ntfy_bot python bot.py init transport DCACCOUNT:bot@arcanechat.me
+
+# Add a backup via email credentials
+docker compose run --rm ntfy_bot python bot.py init transport backup@example.com "PASSWORD"
+```
+
+You can also manage transports directly in Delta Chat using `/addtransport` and `/transports`.
 
 ## Running the Bot
 

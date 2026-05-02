@@ -310,6 +310,15 @@ async def handle_ntfy_post(request):
                     logger.info(f"Calling send_msg for chat {dc_chat_id} on account {acc_id}...")
                     msg_id = dc_bot_instance.rpc.send_msg(acc_id, dc_chat_id, msg_data)
                     logger.info(f"Successfully sent msg_id {msg_id} to chat {dc_chat_id} on account {acc_id}")
+                    
+                    # Track sending stats
+                    try:
+                        addr = dc_bot_instance.rpc.get_config(acc_id, "addr")
+                        if addr:
+                            database.increment_transport_sent(addr)
+                    except Exception:
+                        pass
+                        
                     success = True
                     break # Break out of account loop, we found it!
                 except Exception as e:
@@ -1069,7 +1078,11 @@ def get_help_text(bot, accid, from_id):
             f"**Admin Commands:**\n"
             f"/accounts — List configured bot accounts\n"
             f"/rmaccount <id> — Delete a bot account\n"
-            f"/url <url> — Set the bot's public URL\n\n"
+            f"/url <url> — Set the bot's public URL\n"
+            f"/transports — Show configured mail relays & stats\n"
+            f"/addtransport — Add a backup mail relay\n"
+            f"/rmtransport <addr> — Remove a mail relay\n"
+            f"/setprimary <addr> — Manually switch the primary relay\n\n"
         )
         
     help_text += f"Run your own bot: https://github.com/mrgluek/deltachat_ntfy"
@@ -1087,6 +1100,17 @@ def on_new_message(bot, accid, event):
     if msg.is_info:
         return
         
+    # Track receiving stats
+    try:
+        # We try to get the current primary address as the receiver
+        # Ideally core would tell us which transport received it, 
+        # but for now we attribute it to the main account address.
+        addr = bot.rpc.get_config(accid, "addr")
+        if addr:
+            database.increment_transport_received(addr)
+    except Exception:
+        pass
+
     text = (msg.text or "").strip()
     
     # 1. URL detection for subscription (e.g. https://ntfy.gluek.info/topic)
@@ -1201,6 +1225,15 @@ def _publish_from_chat(bot, accid, topic, message, sender_chat_id, title=""):
                     if not is_private:
                         msg_data.override_sender_name = f"#{topic}"
                     dc_bot_instance.rpc.send_msg(acc_id, dc_chat_id, msg_data)
+                    
+                    # Track sending stats
+                    try:
+                        addr = dc_bot_instance.rpc.get_config(acc_id, "addr")
+                        if addr:
+                            database.increment_transport_sent(addr)
+                    except Exception:
+                        pass
+                        
                     success = True
                     break
                 except Exception as e:
@@ -1405,9 +1438,68 @@ def last_command(bot, accid, event):
         
     recent = database.get_recent_notifications(topics, limit=5)
     
-    if not recent:
-        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="No recent notifications for your topics."))
+def _dc_send_msg_with_stats(bot, accid, chat_id, msg_data):
+    """Wrapper for bot.rpc.send_msg that tracks stats and handles transport failover."""
+    max_attempts = 2
+    for attempt in range(max_attempts):
+        try:
+            msg_id = bot.rpc.send_msg(accid, chat_id, msg_data)
+            # Track success
+            try:
+                addr = bot.rpc.get_config(accid, "addr")
+                if addr:
+                    database.increment_transport_sent(addr)
+            except Exception:
+                pass
+            return msg_id
+        except Exception as e:
+            error_str = str(e).lower()
+            # If it's a transport-related error and we have another attempt left
+            if attempt < max_attempts - 1 and any(err in error_str for err in ["network", "timeout", "connection", "unreachable", "smtp", "status 0"]):
+                try:
+                    transports = bot.rpc.list_transports(accid)
+                    if len(transports) > 1:
+                        # Find the first backup and try to promote it to primary
+                        for t in transports:
+                            if t.get('role') == 'backup':
+                                addr = t.get('addr')
+                                bot.logger.warning(f"Primary transport failed. Attempting to switch to backup: {addr}")
+                                try:
+                                    bot.rpc.add_or_update_transport(accid, {"addr": addr, "role": "primary"})
+                                    import time
+                                    time.sleep(2) # Give core some time
+                                    break 
+                                except Exception:
+                                    continue
+                except Exception:
+                    pass
+            
+            if attempt == max_attempts - 1:
+                bot.logger.error(f"Failed to send DC message: {e}")
+                raise
+
+@dc_cli.on(events.NewMessage(command="/setprimary"))
+def setprimary_command(bot, accid, event):
+    """Set a specific transport as primary. Admin only."""
+    msg = event.msg
+    contact = bot.rpc.get_contact(accid, msg.from_id)
+    sender_email = contact.address
+
+    admin_email = database.get_config("admin_dc_email")
+    if not admin_email or admin_email.lower() != sender_email.lower():
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Only the bot administrator can use /setprimary."))
         return
+
+    addr = event.payload.strip()
+    if not addr:
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="Usage: /setprimary user@example.com"))
+        return
+
+    try:
+        bot.rpc.add_or_update_transport(accid, {"addr": addr, "role": "primary"})
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"✅ Transport `{addr}` is now primary."))
+    except Exception as e:
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"❌ Failed to set primary transport: {e}"))
         
     lines = ["🕒 **Last 5 Notifications**\n"]
     for notif in recent:
@@ -1450,8 +1542,196 @@ def url_command(bot, accid, event):
     database.set_config("bot_url", url)
     bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"✅ Bot URL updated to: {url}"))
 
+@dc_cli.on(events.NewMessage(command="/transports"))
+def transports_command(bot, accid, event):
+    """Show configured transports (mail relays) and their status."""
+    msg = event.msg
+    contact = bot.rpc.get_contact(accid, msg.from_id)
+    sender_email = contact.address
+
+    admin_email = database.get_config("admin_dc_email")
+    if not admin_email or admin_email.lower() != sender_email.lower():
+        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="❌ This command is only for the administrator."))
+        return
+
+    try:
+        transports = bot.rpc.list_transports(accid)
+    except Exception as e:
+        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"❌ Failed to list transports: {e}"))
+        return
+
+    if not transports:
+        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="No transports configured."))
+        return
+
+    # Get connectivity status
+    connectivity = 0
+    connectivity_label = "❓ Unknown"
+    try:
+        connectivity = bot.rpc.get_connectivity(accid)
+        if connectivity >= 4000:
+            connectivity_label = "🟢 Connected"
+        elif connectivity >= 3000:
+            connectivity_label = "🔄 Working"
+        elif connectivity >= 2000:
+            connectivity_label = "🟡 Connecting"
+        else:
+            connectivity_label = "🔴 Not connected"
+    except Exception:
+        pass
+
+    # Get per-transport statistics from database
+    stats_map = {}
+    for s in database.get_all_transport_stats():
+        stats_map[s['addr']] = s
+
+    transport_addrs = []
+    for t in transports:
+        addr = t.get('addr', '') if isinstance(t, dict) else getattr(t, 'addr', '')
+        transport_addrs.append(addr)
+
+    reply = f"🔌 **Mail Relays (Transports)**\n\nStatus: {connectivity_label}\n\n"
+
+    for i, addr in enumerate(transport_addrs):
+        role = "🏠 Primary" if i == 0 else "🔄 Backup"
+        reply += f"**{role}:** `{addr}`\n"
+
+        stats = stats_map.get(addr)
+        if stats:
+            reply += f"  📤 Sent: {stats['msgs_sent']}  📥 Received: {stats['msgs_received']}\n"
+            if stats.get('last_sent_at'):
+                import datetime
+                last_sent = datetime.datetime.fromtimestamp(stats['last_sent_at']).strftime('%Y-%m-%d %H:%M')
+                reply += f"  Last sent: {last_sent}\n"
+            if stats.get('last_received_at'):
+                import datetime
+                last_recv = datetime.datetime.fromtimestamp(stats['last_received_at']).strftime('%Y-%m-%d %H:%M')
+                reply += f"  Last received: {last_recv}\n"
+        else:
+            reply += f"  📤 Sent: 0  📥 Received: 0\n"
+        reply += "\n"
+
+    reply += f"Total transports: {len(transport_addrs)}"
+    bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=reply))
+
+@dc_cli.on(events.NewMessage(command="/addtransport"))
+def addtransport_command(bot, accid, event):
+    """Add a backup mail relay (transport). Admin only."""
+    msg = event.msg
+    contact = bot.rpc.get_contact(accid, msg.from_id)
+    sender_email = contact.address
+
+    admin_email = database.get_config("admin_dc_email")
+    if not admin_email or admin_email.lower() != sender_email.lower():
+        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="❌ This command is only for the administrator."))
+        return
+
+    payload = event.payload.strip()
+    if not payload:
+        bot.rpc.send_msg(accid, msg.chat_id, MsgData(
+            text="Usage:\n"
+                 "/addtransport DCACCOUNT:server.example\n"
+                 "/addtransport user@example.com password123"
+        ))
+        return
+
+    try:
+        if payload.startswith("DCACCOUNT:"):
+            # QR-style chatmail URI
+            bot.rpc.add_transport_from_qr(accid, payload)
+            bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"✅ Backup transport added via chatmail URI."))
+        else:
+            parts = payload.split(None, 1)
+            if len(parts) < 2:
+                bot.rpc.send_msg(accid, msg.chat_id, MsgData(
+                    text="❌ For email accounts, provide both address and password:\n"
+                         "/addtransport user@example.com password123"
+                ))
+                return
+            addr, password = parts[0], parts[1]
+            bot.rpc.add_or_update_transport(accid, {"addr": addr, "password": password})
+            bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"✅ Backup transport `{addr}` added."))
+    except Exception as e:
+        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"❌ Failed to add transport: {e}"))
+
+@dc_cli.on(events.NewMessage(command="/rmtransport"))
+def rmtransport_command(bot, accid, event):
+    """Remove a mail relay (transport). Admin only."""
+    msg = event.msg
+    contact = bot.rpc.get_contact(accid, msg.from_id)
+    sender_email = contact.address
+
+    admin_email = database.get_config("admin_dc_email")
+    if not admin_email or admin_email.lower() != sender_email.lower():
+        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="❌ This command is only for the administrator."))
+        return
+
+    addr = event.payload.strip()
+    if not addr:
+        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="Usage: /rmtransport user@example.com"))
+        return
+
+    # Safety: don't allow removing the last transport
+    try:
+        transports = bot.rpc.list_transports(accid)
+        transport_addrs = []
+        for t in transports:
+            a = t.get('addr', '') if isinstance(t, dict) else getattr(t, 'addr', '')
+            transport_addrs.append(a)
+        if len(transport_addrs) <= 1:
+            bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="❌ Cannot remove the last transport. Add another one first."))
+            return
+        if addr not in transport_addrs:
+            bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"❌ Transport `{addr}` not found. Use /transports to see configured relays."))
+            return
+    except Exception as e:
+        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"❌ Failed to check transports: {e}"))
+        return
+
+    try:
+        bot.rpc.delete_transport(accid, addr)
+        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"✅ Transport `{addr}` removed."))
+    except Exception as e:
+        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"❌ Failed to remove transport: {e}"))
+
 if __name__ == "__main__":
     import sys
+    # Handle 'init transport' CLI command
+    if len(sys.argv) > 2 and sys.argv[1] == "init" and sys.argv[2] == "transport":
+        if len(sys.argv) < 4:
+            print("Usage:")
+            print("  python bot.py init transport DCACCOUNT:uri")
+            print("  python bot.py init transport addr password")
+            sys.exit(1)
+            
+        # We need a temporary bot instance to call RPC
+        from deltabot_cli import BotCli
+        temp_bot = BotCli("ntfy_bot")
+        
+        # Get first account
+        accids = temp_bot.rpc.get_all_account_ids()
+        if not accids:
+            print("Error: No accounts configured. Run 'python bot.py init dc addr password' first.")
+            sys.exit(1)
+        accid = accids[0]
+        
+        payload = sys.argv[3]
+        try:
+            if payload.startswith("DCACCOUNT:"):
+                temp_bot.rpc.add_transport_from_qr(accid, payload)
+                print(f"Success: Backup transport added via chatmail URI.")
+            elif len(sys.argv) >= 5:
+                addr, password = sys.argv[3], sys.argv[4]
+                temp_bot.rpc.add_or_update_transport(accid, {"addr": addr, "password": password})
+                print(f"Success: Backup transport {addr} added.")
+            else:
+                print("Error: For email accounts, provide both address and password.")
+                sys.exit(1)
+        except Exception as e:
+            print(f"Error: {e}")
+            sys.exit(1)
+        sys.exit(0)
+
     # If no subcommand is provided, default to 'serve' to start the bot
     if len(sys.argv) == 1:
         sys.argv.append("serve")

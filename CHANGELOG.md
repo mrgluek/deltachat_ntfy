@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-05-02]
+
+### Added
+- **Multi-transport Support (Backup Relays)**: Added support for multiple email transports on a single account for high availability.
+  - Core automatically fails over to backup relays if the primary server is down.
+  - New admin command `/transports` to view configured relays, connectivity status, and usage statistics.
+  - New admin commands `/addtransport` and `/rmtransport` to manage relays from the chat.
+  - New CLI command `python bot.py init transport` for manual relay setup.
+- **Transport Statistics Tracking**: The bot now tracks the number of messages sent and received per transport address.
+
 ## [2026-04-29]
 
 ### Added
