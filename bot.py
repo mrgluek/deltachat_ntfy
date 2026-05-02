@@ -1363,41 +1363,6 @@ def donate_command(bot, accid, event):
     )
     _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=support_msg))
 
-@dc_cli.on(events.NewMessage(command="/initadmin"))
-def initadmin_command(bot, accid, event):
-    """Claim bot ownership and record cryptographic fingerprint."""
-    msg = event.msg
-    contact = bot.rpc.get_contact(accid, msg.from_id)
-    sender_email = contact.address
-    
-    admin_email = database.get_config("admin_dc_email")
-    admin_fp = database.get_admin_fingerprint()
-    
-    # Get sender fingerprint
-    full_fp = _get_contact_fingerprint(bot, accid, msg.from_id)
-    short_fp = full_fp[-8:].upper() if full_fp else "unknown"
-
-    if admin_email or admin_fp:
-        # If already admin by email, but fingerprint is missing, upgrade it
-        if admin_email and admin_email.lower() == sender_email.lower() and not admin_fp:
-            if full_fp:
-                database.set_admin_fingerprint(full_fp)
-                _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"👑 Verification upgraded for {sender_email}.\nFingerprint: {short_fp}"))
-            else:
-                _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Could not retrieve your fingerprint. "
-                                                                "The encryption key exchange may not be complete yet. "
-                                                                "Try sending another message and then run /initadmin again."))
-        else:
-            _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Administrator is already set."))
-        return
-        
-    database.set_config("admin_dc_email", sender_email)
-    if full_fp:
-        database.set_admin_fingerprint(full_fp)
-        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"👑 You are now the bot administrator ({sender_email}).\nFingerprint: {short_fp}"))
-    else:
-        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"👑 You are now the bot administrator ({sender_email}).\n"
-                                                        "⚠️ Fingerprint not found yet. Run /initadmin again later to secure your identity."))
 
 @dc_cli.on(events.NewMessage(command="/accounts"))
 def accounts_command(bot, accid, event):
