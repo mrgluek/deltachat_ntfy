@@ -1095,24 +1095,26 @@ def get_help_text(bot, accid, from_id):
         f"💡 _You can also reply to any notification to post back to its topic._\n\n"
     )
     
+        
     if not admin_email:
         help_text += (
             f"**Initialisation Command:**\n"
             f"/initadmin — Claim bot ownership (if no admin is set)\n\n"
         )
-    else:
-        help_text += f"👑 **Admin:** `{admin_email}`\n\n"
-        if _is_dc_admin(bot, accid, from_id):
-            help_text += (
-                f"**Admin Commands:**\n"
-                f"/accounts — List configured bot accounts\n"
-                f"/rmaccount <id> — Delete a bot account\n"
-                f"/url <url> — Set the bot's public URL\n"
-                f"/transports — Show configured mail relays & stats\n"
-                f"/addtransport — Add a backup mail relay\n"
-                f"/rmtransport <addr> — Remove a mail relay\n"
-                f"/setprimary <addr> — Manually switch the primary relay\n\n"
-            )
+    elif _is_dc_admin(bot, accid, from_id):
+        admin_fp = database.get_admin_fingerprint()
+        fp_suffix = f" ({admin_fp[-8:].upper()})" if admin_fp else ""
+        help_text += f"👑 **Admin:** `{admin_email}`{fp_suffix}\n\n"
+        help_text += (
+            f"**Admin Commands:**\n"
+            f"/accounts — List configured bot accounts\n"
+            f"/rmaccount <id> — Delete a bot account\n"
+            f"/url <url> — Set the bot's public URL\n"
+            f"/transports — Show configured mail relays & stats\n"
+            f"/addtransport — Add a backup mail relay\n"
+            f"/rmtransport <addr> — Remove a mail relay\n"
+            f"/setprimary <addr> — Manually switch the primary relay\n\n"
+        )
         
     help_text += f"Run your own bot: https://github.com/mrgluek/deltachat_ntfy"
     return help_text
