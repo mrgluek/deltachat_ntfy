@@ -253,4 +253,12 @@ def get_all_transport_stats() -> list[dict]:
         conn.close()
         return [dict(r) for r in rows]
 
+def get_admin_fingerprint():
+    """Get the saved admin DC fingerprint."""
+    return get_config("admin_dc_fingerprint")
+
+def set_admin_fingerprint(fp):
+    """Set the admin DC fingerprint."""
+    set_config("admin_dc_fingerprint", fp)
+
 init_db()

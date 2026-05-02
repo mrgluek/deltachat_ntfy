@@ -1042,6 +1042,33 @@ def on_start(bot, _args):
         except Exception as e:
             bot.logger.error(f"Failed to generate QR code: {e}")
 
+def _is_dc_admin(bot, accid, contact_id):
+    """Check if the given contact is the bot administrator (by email or fingerprint)."""
+    try:
+        contact = bot.rpc.get_contact(accid, contact_id)
+        sender_email = contact.address
+        
+        # 1. Check fingerprint (strongest)
+        admin_fp = database.get_admin_fingerprint()
+        if admin_fp:
+            # Get contact fingerprint
+            try:
+                c_fp = bot.rpc.get_contact_config(accid, contact_id, "fp")
+                if c_fp and c_fp == admin_fp:
+                    return True
+            except Exception:
+                pass
+        
+        # 2. Check email (legacy or initial setup)
+        admin_email = database.get_config("admin_dc_email")
+        if admin_email and admin_email.lower() == sender_email.lower():
+            # If we don't have a fingerprint yet, this is a good time to upgrade!
+            return True
+            
+    except Exception as e:
+        bot.logger.error(f"Error during admin verification: {e}")
+    return False
+
 def get_help_text(bot, accid, from_id):
     contact = bot.rpc.get_contact(accid, from_id)
     sender_email = contact.address
@@ -1073,17 +1100,19 @@ def get_help_text(bot, accid, from_id):
             f"**Initialisation Command:**\n"
             f"/initadmin — Claim bot ownership (if no admin is set)\n\n"
         )
-    elif admin_email.lower() == sender_email.lower():
-        help_text += (
-            f"**Admin Commands:**\n"
-            f"/accounts — List configured bot accounts\n"
-            f"/rmaccount <id> — Delete a bot account\n"
-            f"/url <url> — Set the bot's public URL\n"
-            f"/transports — Show configured mail relays & stats\n"
-            f"/addtransport — Add a backup mail relay\n"
-            f"/rmtransport <addr> — Remove a mail relay\n"
-            f"/setprimary <addr> — Manually switch the primary relay\n\n"
-        )
+    else:
+        help_text += f"👑 **Admin:** `{admin_email}`\n\n"
+        if _is_dc_admin(bot, accid, from_id):
+            help_text += (
+                f"**Admin Commands:**\n"
+                f"/accounts — List configured bot accounts\n"
+                f"/rmaccount <id> — Delete a bot account\n"
+                f"/url <url> — Set the bot's public URL\n"
+                f"/transports — Show configured mail relays & stats\n"
+                f"/addtransport — Add a backup mail relay\n"
+                f"/rmtransport <addr> — Remove a mail relay\n"
+                f"/setprimary <addr> — Manually switch the primary relay\n\n"
+            )
         
     help_text += f"Run your own bot: https://github.com/mrgluek/deltachat_ntfy"
     return help_text
@@ -1092,7 +1121,7 @@ def get_help_text(bot, accid, from_id):
 def help_command(bot, accid, event):
     msg = event.msg
     help_text = get_help_text(bot, accid, msg.from_id)
-    bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=help_text))
+    _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=help_text))
 
 @dc_cli.on(events.NewMessage)
 def on_new_message(bot, accid, event):
@@ -1295,7 +1324,7 @@ def newgroup_command(bot, accid, event):
             f"Join link: {qrdata}\n\n"
             f"Share this link or scan the QR code to join the group. Once inside the group, use /sub to subscribe the group to topics!"
         )
-        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=reply_text))
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=reply_text))
     except Exception as e:
         bot.logger.error(f"Failed to create group: {e}")
         bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"❌ Failed to create group: {e}"))
@@ -1310,24 +1339,49 @@ def donate_command(bot, accid, event):
         "🚀 Tribute: https://web.tribute.tg/d/IWb (🇷🇺 russian cards, SBP, high commissions)\n\n"
         "Thank you! 🙏"
     )
-    bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=support_msg))
+    _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=support_msg))
 
 @dc_cli.on(events.NewMessage(command="/initadmin"))
 def initadmin_command(bot, accid, event):
+    """Claim bot ownership and record cryptographic fingerprint."""
     msg = event.msg
     contact = bot.rpc.get_contact(accid, msg.from_id)
     sender_email = contact.address
     
-    current_admin = database.get_config("admin_dc_email")
-    if current_admin:
-        if current_admin.lower() == sender_email.lower():
-            bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="✅ You are already the administrator."))
+    admin_email = database.get_config("admin_dc_email")
+    admin_fp = database.get_admin_fingerprint()
+    
+    # Get sender fingerprint
+    short_fp = "unknown"
+    full_fp = None
+    try:
+        full_fp = bot.rpc.get_contact_config(accid, msg.from_id, "fp")
+        if full_fp:
+            short_fp = full_fp[-8:].upper()
+    except Exception:
+        pass
+
+    if admin_email or admin_fp:
+        # If already admin by email, but fingerprint is missing, upgrade it
+        if admin_email and admin_email.lower() == sender_email.lower() and not admin_fp:
+            if full_fp:
+                database.set_admin_fingerprint(full_fp)
+                _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"👑 Verification upgraded for {sender_email}.\nFingerprint: {short_fp}"))
+            else:
+                _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Could not retrieve your fingerprint. "
+                                                                "The encryption key exchange may not be complete yet. "
+                                                                "Try sending another message and then run /initadmin again."))
         else:
-            bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="❌ Administrator is already set."))
+            _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Administrator is already set."))
         return
         
     database.set_config("admin_dc_email", sender_email)
-    bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"👑 You are now the bot administrator ({sender_email})."))
+    if full_fp:
+        database.set_admin_fingerprint(full_fp)
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"👑 You are now the bot administrator ({sender_email}).\nFingerprint: {short_fp}"))
+    else:
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"👑 You are now the bot administrator ({sender_email}).\n"
+                                                        "⚠️ Fingerprint not found yet. Run /initadmin again later to secure your identity."))
 
 @dc_cli.on(events.NewMessage(command="/accounts"))
 def accounts_command(bot, accid, event):
@@ -1352,7 +1406,7 @@ def accounts_command(bot, accid, event):
             reply += f"• Account ID: {aid} (Error reading: {e})\n\n"
             
     reply += "To delete an account, use: /rmaccount <id>\nNote: The bot now automatically routes messages to the correct account based on the chat ID."
-    bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=reply))
+    _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=reply))
 
 @dc_cli.on(events.NewMessage(command="/rmaccount"))
 def rmaccount_command(bot, accid, event):
@@ -1425,7 +1479,7 @@ def list_command(bot, accid, event):
     bot_url = database.get_config("bot_url") or "https://ntfy.gluek.info"
     base_url = bot_url.rstrip('/')
     topics_list = "\n".join([f"- {base_url}/{t}" for t in topics])
-    bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"📋 Subscribed topics:\n{topics_list}"))
+    _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"📋 Subscribed topics:\n{topics_list}"))
 
 @dc_cli.on(events.NewMessage(command="/last"))
 def last_command(bot, accid, event):
@@ -1482,11 +1536,7 @@ def _dc_send_msg_with_stats(bot, accid, chat_id, msg_data):
 def setprimary_command(bot, accid, event):
     """Set a specific transport as primary. Admin only."""
     msg = event.msg
-    contact = bot.rpc.get_contact(accid, msg.from_id)
-    sender_email = contact.address
-
-    admin_email = database.get_config("admin_dc_email")
-    if not admin_email or admin_email.lower() != sender_email.lower():
+    if not _is_dc_admin(bot, accid, msg.from_id):
         _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Only the bot administrator can use /setprimary."))
         return
 
@@ -1512,7 +1562,7 @@ def setprimary_command(bot, accid, event):
     if lines[-1] == "---":
         lines.pop()
         
-    bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="\n".join(lines)))
+    _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="\n".join(lines)))
 
 @dc_cli.on(events.NewMessage(command="/stats"))
 def stats_command(bot, accid, event):
@@ -1521,7 +1571,7 @@ def stats_command(bot, accid, event):
     last_24h = database.get_notifications_last_24h()
     
     reply = f"📊 **Ntfy Bot Statistics**\n\nNotifications received in the last 24h: {last_24h}"
-    bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=reply))
+    _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=reply))
 
 @dc_cli.on(events.NewMessage(command="/url"))
 def url_command(bot, accid, event):
@@ -1540,18 +1590,14 @@ def url_command(bot, accid, event):
         return
     
     database.set_config("bot_url", url)
-    bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"✅ Bot URL updated to: {url}"))
+    _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"✅ Bot URL updated to: {url}"))
 
 @dc_cli.on(events.NewMessage(command="/transports"))
 def transports_command(bot, accid, event):
     """Show configured transports (mail relays) and their status."""
     msg = event.msg
-    contact = bot.rpc.get_contact(accid, msg.from_id)
-    sender_email = contact.address
-
-    admin_email = database.get_config("admin_dc_email")
-    if not admin_email or admin_email.lower() != sender_email.lower():
-        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="❌ This command is only for the administrator."))
+    if not _is_dc_admin(bot, accid, msg.from_id):
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ This command is only for the administrator."))
         return
 
     try:
@@ -1612,18 +1658,14 @@ def transports_command(bot, accid, event):
         reply += "\n"
 
     reply += f"Total transports: {len(transport_addrs)}"
-    bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=reply))
+    _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=reply))
 
 @dc_cli.on(events.NewMessage(command="/addtransport"))
 def addtransport_command(bot, accid, event):
     """Add a backup mail relay (transport). Admin only."""
     msg = event.msg
-    contact = bot.rpc.get_contact(accid, msg.from_id)
-    sender_email = contact.address
-
-    admin_email = database.get_config("admin_dc_email")
-    if not admin_email or admin_email.lower() != sender_email.lower():
-        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="❌ This command is only for the administrator."))
+    if not _is_dc_admin(bot, accid, msg.from_id):
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ This command is only for the administrator."))
         return
 
     payload = event.payload.strip()
@@ -1658,12 +1700,8 @@ def addtransport_command(bot, accid, event):
 def rmtransport_command(bot, accid, event):
     """Remove a mail relay (transport). Admin only."""
     msg = event.msg
-    contact = bot.rpc.get_contact(accid, msg.from_id)
-    sender_email = contact.address
-
-    admin_email = database.get_config("admin_dc_email")
-    if not admin_email or admin_email.lower() != sender_email.lower():
-        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="❌ This command is only for the administrator."))
+    if not _is_dc_admin(bot, accid, msg.from_id):
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ This command is only for the administrator."))
         return
 
     addr = event.payload.strip()
