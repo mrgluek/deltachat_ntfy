@@ -1527,10 +1527,18 @@ def last_command(bot, accid, event):
 
 def _dc_send_msg_with_stats(bot, accid, chat_id, msg_data):
     """Wrapper for bot.rpc.send_msg that tracks stats and handles transport failover."""
-    max_attempts = 2
+    # Try to determine how many attempts we should make based on number of transports
+    try:
+        transports = bot.rpc.list_transports(accid)
+        max_attempts = max(2, len(transports))
+    except Exception:
+        transports = []
+        max_attempts = 2
+
     for attempt in range(max_attempts):
         try:
             msg_id = bot.rpc.send_msg(accid, chat_id, msg_data)
+            
             # Track success
             addr = "unknown"
             try:
@@ -1539,34 +1547,42 @@ def _dc_send_msg_with_stats(bot, accid, chat_id, msg_data):
                     database.increment_transport_sent(addr)
             except Exception:
                 pass
+            
             bot.logger.info(f"Successfully sent msg_id {msg_id} to chat {chat_id} on account {accid} (from {addr})")
             return msg_id
+            
         except Exception as e:
             error_str = str(e).lower()
-            # If it's a transport-related error and we have another attempt left
-            if attempt < max_attempts - 1 and any(err in error_str for err in ["network", "timeout", "connection", "unreachable", "smtp", "status 0"]):
+            # List of strings that suggest a transport/network level failure
+            transport_errors = ["network", "timeout", "connection", "unreachable", "smtp", "status 0", "socket", "refused"]
+            
+            if attempt < max_attempts - 1 and any(err in error_str for err in transport_errors):
                 try:
-                    current_primary = bot.rpc.get_config(accid, "configured_addr")
-                    transports = bot.rpc.list_transports(accid)
+                    # Determine active primary (configured_addr is what we SET, addr is what core is USING)
+                    current_primary = bot.rpc.get_config(accid, "configured_addr") or bot.rpc.get_config(accid, "addr")
+                    
+                    if not transports:
+                        transports = bot.rpc.list_transports(accid)
+                    
                     if len(transports) > 1:
-                        # Find a backup (any address that is not the current primary)
+                        # Find a backup relay we haven't tried yet or just the next one
+                        # We try to find any relay that is NOT the one that just failed
                         for t in transports:
-                            addr = t.get('addr') if isinstance(t, dict) else getattr(t, 'addr', None)
-                            if addr and addr != current_primary:
-                                bot.logger.warning(f"Primary transport failed. Switching configured_addr to: {addr}")
+                            t_addr = t.get('addr') if isinstance(t, dict) else getattr(t, 'addr', None)
+                            if t_addr and t_addr != current_primary:
+                                bot.logger.warning(f"Transport {current_primary} failed. Switching to backup: {t_addr}")
                                 try:
-                                    bot.rpc.set_config(accid, "configured_addr", addr)
-                                    import time
-                                    time.sleep(2) # Give core some time to reconfigure
+                                    bot.rpc.set_config(accid, "configured_addr", t_addr)
+                                    time.sleep(2) # Give core a moment to reconfigure
                                     break 
                                 except Exception as set_e:
-                                    bot.logger.error(f"Failed to set configured_addr: {set_e}")
+                                    bot.logger.error(f"Failed to switch transport: {set_e}")
                                     continue
-                except Exception:
-                    pass
+                except Exception as fail_e:
+                    bot.logger.error(f"Failover logic error: {fail_e}")
             
             if attempt == max_attempts - 1:
-                bot.logger.error(f"Failed to send DC message (Account {accid}) after {max_attempts} attempts: {e}")
+                bot.logger.error(f"Failed to send DC message after {max_attempts} attempts. Last error: {e}")
                 raise e
 
 @dc_cli.on(events.NewMessage(command="/setprimary"))
