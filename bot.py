@@ -1046,13 +1046,13 @@ def _get_contact_fingerprint(bot, accid, contact_id, contact=None):
     """Returns the cryptographic fingerprint of a contact, trying various RPC methods and signatures."""
     # 1. Try directly from the contact object if available
     if contact:
-        # Log all attributes of contact for debugging
-        bot.logger.info(f"Contact {contact_id} attributes: {dir(contact)}")
+        # The contact object from RPC is often a dict-like object
+        get_val = getattr(contact, 'get', lambda k: getattr(contact, k, None))
         for attr in ['fingerprint', 'key_fingerprint', 'public_key']:
-            val = getattr(contact, attr, None)
+            val = get_val(attr)
             if val:
                 import re
-                matches = re.findall(r'[0-9a-fA-F]{32,64}', str(val).replace(' ', ''))
+                matches = re.findall(r'[0-9a-fA-F]{32,64}', str(val).replace(' ', '').replace(':', ''))
                 if matches:
                     bot.logger.info(f"Found fingerprint in contact.{attr}: {matches[0]}")
                     return matches[0].upper()
@@ -1076,12 +1076,16 @@ def _get_contact_fingerprint(bot, accid, contact_id, contact=None):
                 # Log raw info for debugging (helps when fingerprint detection fails)
                 bot.logger.info(f"Contact {contact_id} encryption info: {enc_info}")
                 import re
+                # Clean ALL whitespace including newlines
+                cleaned_info = "".join(enc_info.split()).replace(':', '')
                 # Look for hex strings between 32 and 64 characters (handles SHA-1 and Ed25519)
-                matches = re.findall(r'[0-9a-fA-F]{32,64}', enc_info.replace(' ', '').replace(':', ''))
+                matches = re.findall(r'[0-9a-fA-F]{32,64}', cleaned_info)
                 if matches:
-                    # Usually the last match is the contact's fingerprint
-                    bot.logger.info(f"Found fingerprint(s) in encryption info: {matches}")
-                    return matches[-1].upper()
+                    # In encryption info, we might have multiple fingerprints (Me and Contact).
+                    # We return all of them joined by comma, and let _is_dc_admin check.
+                    fps = ",".join(matches).upper()
+                    bot.logger.info(f"Found fingerprint(s) in encryption info: {fps}")
+                    return fps
         except Exception as e:
             bot.logger.info(f"get_contact_encryption_info{args} failed: {e}")
             continue
@@ -1102,8 +1106,10 @@ def _is_dc_admin(bot, accid, contact_id):
         if admin_fp:
             c_fp = _get_contact_fingerprint(bot, accid, contact_id, contact=contact)
             bot.logger.info(f"Admin check (fp): stored={admin_fp}, current={c_fp}")
-            if c_fp and c_fp == admin_fp:
-                return True
+            if c_fp:
+                # c_fp might be a comma-separated list if multiple keys were found
+                if admin_fp.upper() in c_fp.upper().split(','):
+                    return True
             
             # If fingerprint is set but didn't match, we REJECT even if email matches (security)
             if c_fp:
