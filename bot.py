@@ -1473,7 +1473,19 @@ def last_command(bot, accid, event):
         
     recent = database.get_recent_notifications(topics, limit=5)
     
-def _dc_send_msg_with_stats(bot, accid, chat_id, msg_data):
+    lines = ["🕒 **Last 5 Notifications**\n"]
+    for notif in recent:
+        emoji = get_priority_emoji(str(notif['priority']))
+        title_str = f"**{notif['title']}** " if notif['title'] else ""
+        lines.append(f"{emoji} [{notif['topic']}] {title_str}\n{notif['message']}")
+        lines.append("---")
+        
+    # Remove last separator
+    if lines and lines[-1] == "---":
+        lines.pop()
+        
+    _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="\n".join(lines)))
+
     """Wrapper for bot.rpc.send_msg that tracks stats and handles transport failover."""
     max_attempts = 2
     for attempt in range(max_attempts):
@@ -1533,21 +1545,26 @@ def setprimary_command(bot, accid, event):
     try:
         bot.rpc.set_config(accid, "configured_addr", addr)
         _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"✅ Primary address (`configured_addr`) is now `{addr}`."))
+        
+        # Only attempt to show recent notifications if the config change was successful
+        topics = database.get_subscriptions(msg.chat_id)
+        recent = database.get_recent_notifications(topics, limit=5)
+
+        lines = ["🕒 **Last 5 Notifications**\n"]
+        for notif in recent:
+            emoji = get_priority_emoji(str(notif['priority']))
+            title_str = f"**{notif['title']}** " if notif['title'] else ""
+            lines.append(f"{emoji} [{notif['topic']}] {title_str}\n{notif['message']}")
+            lines.append("---")
+            
+        # Remove last separator
+        if lines and lines[-1] == "---":
+            lines.pop()
+            
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="\n".join(lines)))
     except Exception as e:
-        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"❌ Failed to set primary address: {e}"))
-        
-    lines = ["🕒 **Last 5 Notifications**\n"]
-    for notif in recent:
-        emoji = get_priority_emoji(str(notif['priority']))
-        title_str = f"**{notif['title']}** " if notif['title'] else ""
-        lines.append(f"{emoji} [{notif['topic']}] {title_str}\n{notif['message']}")
-        lines.append("---")
-        
-    # Remove last separator
-    if lines[-1] == "---":
-        lines.pop()
-        
-    _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="\n".join(lines)))
+        _dc_send_msg_with_staf_with_stats(bot, accid, msg.chat_id, MsgData(text=f"❌ Failed to set primary address: {e}"))
+        return
 
 @dc_cli.on(events.NewMessage(command="/stats"))
 def stats_command(bot, accid, event):
