@@ -1192,10 +1192,8 @@ def on_new_message(bot, accid, event):
         
     # Track receiving stats
     try:
-        # We try to get the current primary address as the receiver
-        # Ideally core would tell us which transport received it, 
-        # but for now we attribute it to the main account address.
-        addr = bot.rpc.get_config(accid, "addr")
+        # Use configured_addr (SMTP override) if set, otherwise fallback to main account addr
+        addr = bot.rpc.get_config(accid, "configured_addr") or bot.rpc.get_config(accid, "addr")
         if addr:
             database.increment_transport_received(addr)
     except Exception:
