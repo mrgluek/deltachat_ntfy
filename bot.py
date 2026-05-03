@@ -1042,25 +1042,40 @@ def on_start(bot, _args):
         except Exception as e:
             bot.logger.error(f"Failed to generate QR code: {e}")
 
-def _get_contact_fingerprint(bot, accid, contact_id):
+def _get_contact_fingerprint(bot, accid, contact_id, contact=None):
     """Returns the cryptographic fingerprint of a contact, trying various RPC methods and signatures."""
-    # 1. Try get_contact_config(accid, contact_id, "fp")
+    # 1. Try directly from the contact object if available
+    if contact:
+        for attr in ['fingerprint', 'key_fingerprint', 'public_key']:
+            val = getattr(contact, attr, None)
+            if val:
+                import re
+                matches = re.findall(r'[0-9a-fA-F]{32,64}', str(val).replace(' ', ''))
+                if matches:
+                    return matches[0].upper()
+
+    # 2. Try get_contact_config(accid, contact_id, "fp")
     try:
         fp = bot.rpc.get_contact_config(accid, contact_id, "fp")
         if fp:
-            return fp.upper()
+            return fp.upper().replace(' ', '')
     except Exception:
         pass
 
-    # 2. Try get_contact_encryption_info
+    # 3. Try get_contact_encryption_info
+    # We try different argument variations to be safe across different bindings/core versions
     for args in [(accid, contact_id), (contact_id,)]:
         try:
             # Try positional arguments first
             enc_info = bot.rpc.get_contact_encryption_info(*args)
             if enc_info:
+                # Log raw info for debugging (helps when fingerprint detection fails)
+                bot.logger.debug(f"Contact {contact_id} encryption info: {enc_info}")
                 import re
-                matches = re.findall(r'[0-9a-fA-F]{40}', enc_info.replace(' ', ''))
+                # Look for hex strings between 32 and 64 characters (handles SHA-1 and Ed25519)
+                matches = re.findall(r'[0-9a-fA-F]{32,64}', enc_info.replace(' ', '').replace(':', ''))
                 if matches:
+                    # Usually the last match is the contact's fingerprint
                     return matches[-1].upper()
         except Exception:
             continue
@@ -1070,20 +1085,32 @@ def _get_contact_fingerprint(bot, accid, contact_id):
 def _is_dc_admin(bot, accid, contact_id):
     """Check if the given contact is the bot administrator (by email or fingerprint)."""
     try:
-        contact = bot.rpc.get_contact(accid, contact_id)
-        sender_email = contact.address
+        contact = None
+        try:
+            contact = bot.rpc.get_contact(accid, contact_id)
+        except Exception:
+            pass
         
         # 1. Check fingerprint (strongest)
         admin_fp = database.get_admin_fingerprint()
         if admin_fp:
-            c_fp = _get_contact_fingerprint(bot, accid, contact_id)
+            c_fp = _get_contact_fingerprint(bot, accid, contact_id, contact=contact)
+            bot.logger.info(f"Admin check (fp): stored={admin_fp}, current={c_fp}")
             if c_fp and c_fp == admin_fp:
                 return True
+            
+            # If fingerprint is set but didn't match, we REJECT even if email matches (security)
+            if c_fp:
+                 bot.logger.warning(f"Admin fingerprint mismatch for {contact_id}")
+                 return False
         
         # 2. Check email (legacy or initial setup)
-        admin_email = database.get_config("admin_dc_email")
-        if admin_email and admin_email.lower() == sender_email.lower():
-            return True
+        if contact:
+            sender_email = contact.address
+            admin_email = database.get_config("admin_dc_email")
+            if admin_email and admin_email.lower() == sender_email.lower():
+                bot.logger.info(f"Admin check (email): stored={admin_email}, current={sender_email}")
+                return True
             
     except Exception as e:
         bot.logger.error(f"Error during admin verification: {e}")
