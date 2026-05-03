@@ -1046,18 +1046,22 @@ def _get_contact_fingerprint(bot, accid, contact_id, contact=None):
     """Returns the cryptographic fingerprint of a contact, trying various RPC methods and signatures."""
     # 1. Try directly from the contact object if available
     if contact:
+        # Log all attributes of contact for debugging
+        bot.logger.debug(f"Contact {contact_id} attributes: {dir(contact)}")
         for attr in ['fingerprint', 'key_fingerprint', 'public_key']:
             val = getattr(contact, attr, None)
             if val:
                 import re
                 matches = re.findall(r'[0-9a-fA-F]{32,64}', str(val).replace(' ', ''))
                 if matches:
+                    bot.logger.debug(f"Found fingerprint in contact.{attr}: {matches[0]}")
                     return matches[0].upper()
 
     # 2. Try get_contact_config(accid, contact_id, "fp")
     try:
         fp = bot.rpc.get_contact_config(accid, contact_id, "fp")
         if fp:
+            bot.logger.debug(f"Found fingerprint in contact config 'fp': {fp}")
             return fp.upper().replace(' ', '')
     except Exception:
         pass
@@ -1076,8 +1080,10 @@ def _get_contact_fingerprint(bot, accid, contact_id, contact=None):
                 matches = re.findall(r'[0-9a-fA-F]{32,64}', enc_info.replace(' ', '').replace(':', ''))
                 if matches:
                     # Usually the last match is the contact's fingerprint
+                    bot.logger.debug(f"Found fingerprint(s) in encryption info: {matches}")
                     return matches[-1].upper()
-        except Exception:
+        except Exception as e:
+            bot.logger.debug(f"get_contact_encryption_info{args} failed: {e}")
             continue
             
     return None
@@ -1513,6 +1519,7 @@ def last_command(bot, accid, event):
         
     _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="\n".join(lines)))
 
+def _dc_send_msg_with_stats(bot, accid, chat_id, msg_data):
     """Wrapper for bot.rpc.send_msg that tracks stats and handles transport failover."""
     max_attempts = 2
     for attempt in range(max_attempts):
@@ -1590,7 +1597,7 @@ def setprimary_command(bot, accid, event):
             
         _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="\n".join(lines)))
     except Exception as e:
-        _dc_send_msg_with_staf_with_stats(bot, accid, msg.chat_id, MsgData(text=f"❌ Failed to set primary address: {e}"))
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"❌ Failed to set primary address: {e}"))
         return
 
 @dc_cli.on(events.NewMessage(command="/stats"))
