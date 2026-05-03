@@ -1054,14 +1054,14 @@ def _get_contact_fingerprint(bot, accid, contact_id, contact=None):
                 import re
                 matches = re.findall(r'[0-9a-fA-F]{32,64}', str(val).replace(' ', '').replace(':', ''))
                 if matches:
-                    bot.logger.info(f"Found fingerprint in contact.{attr}: {matches[0]}")
+                    bot.logger.debug(f"Found fingerprint in contact.{attr}: {matches[0]}")
                     return matches[0].upper()
 
     # 2. Try get_contact_config(accid, contact_id, "fp")
     try:
         fp = bot.rpc.get_contact_config(accid, contact_id, "fp")
         if fp:
-            bot.logger.info(f"Found fingerprint in contact config 'fp': {fp}")
+            bot.logger.debug(f"Found fingerprint in contact config 'fp': {fp}")
             return fp.upper().replace(' ', '')
     except Exception:
         pass
@@ -1074,7 +1074,7 @@ def _get_contact_fingerprint(bot, accid, contact_id, contact=None):
             enc_info = bot.rpc.get_contact_encryption_info(*args)
             if enc_info:
                 # Log raw info for debugging (helps when fingerprint detection fails)
-                bot.logger.info(f"Contact {contact_id} encryption info: {enc_info}")
+                bot.logger.debug(f"Contact {contact_id} encryption info: {enc_info}")
                 import re
                 # Clean ALL whitespace including newlines
                 cleaned_info = "".join(enc_info.split()).replace(':', '')
@@ -1084,10 +1084,10 @@ def _get_contact_fingerprint(bot, accid, contact_id, contact=None):
                     # In encryption info, we might have multiple fingerprints (Me and Contact).
                     # We return all of them joined by comma, and let _is_dc_admin check.
                     fps = ",".join(matches).upper()
-                    bot.logger.info(f"Found fingerprint(s) in encryption info: {fps}")
+                    bot.logger.debug(f"Found fingerprint(s) in encryption info: {fps}")
                     return fps
         except Exception as e:
-            bot.logger.info(f"get_contact_encryption_info{args} failed: {e}")
+            bot.logger.debug(f"get_contact_encryption_info{args} failed: {e}")
             continue
             
     return None
@@ -1105,7 +1105,7 @@ def _is_dc_admin(bot, accid, contact_id):
         admin_fp = database.get_admin_fingerprint()
         if admin_fp:
             c_fp = _get_contact_fingerprint(bot, accid, contact_id, contact=contact)
-            bot.logger.info(f"Admin check (fp): stored={admin_fp}, current={c_fp}")
+            bot.logger.debug(f"Admin check (fp): stored={admin_fp}, current={c_fp}")
             if c_fp:
                 # c_fp might be a comma-separated list if multiple keys were found
                 if admin_fp.upper() in c_fp.upper().split(','):
@@ -1121,7 +1121,7 @@ def _is_dc_admin(bot, accid, contact_id):
             sender_email = contact.address
             admin_email = database.get_config("admin_dc_email")
             if admin_email and admin_email.lower() == sender_email.lower():
-                bot.logger.info(f"Admin check (email): stored={admin_email}, current={sender_email}")
+                bot.logger.debug(f"Admin check (email): stored={admin_email}, current={sender_email}")
                 return True
             
     except Exception as e:
@@ -1585,23 +1585,6 @@ def setprimary_command(bot, accid, event):
     try:
         bot.rpc.set_config(accid, "configured_addr", addr)
         _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"✅ Primary address (`configured_addr`) is now `{addr}`."))
-        
-        # Only attempt to show recent notifications if the config change was successful
-        topics = database.get_subscriptions(msg.chat_id)
-        recent = database.get_recent_notifications(topics, limit=5)
-
-        lines = ["🕒 **Last 5 Notifications**\n"]
-        for notif in recent:
-            emoji = get_priority_emoji(str(notif['priority']))
-            title_str = f"**{notif['title']}** " if notif['title'] else ""
-            lines.append(f"{emoji} [{notif['topic']}] {title_str}\n{notif['message']}")
-            lines.append("---")
-            
-        # Remove last separator
-        if lines and lines[-1] == "---":
-            lines.pop()
-            
-        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="\n".join(lines)))
     except Exception as e:
         _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"❌ Failed to set primary address: {e}"))
         return
