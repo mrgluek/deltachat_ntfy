@@ -996,6 +996,8 @@ def on_init(bot, args):
         dc_accid = accid
         bot.rpc.set_config(accid, "displayname", "Ntfy Bot")
         bot.rpc.set_config(accid, "selfstatus", "A Delta Chat bot that emulates a ntfy.sh backend to broadcast notifications from HTTP POST requests to Delta Chat users and groups: https://github.com/mrgluek/deltachat_ntfy")
+        # Auto-delete messages after 24 hours to save disk space
+        bot.rpc.set_config(accid, "delete_device_after", "86400")
         # Set bot avatar if icon file exists
         try:
             base_dir = os.path.dirname(os.path.abspath(__file__))
