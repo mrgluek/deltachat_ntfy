@@ -1024,10 +1024,21 @@ def on_start(bot, _args):
     accounts = bot.rpc.get_all_account_ids()
     if accounts:
         dc_accid = accounts[0]
+        
+        # Show configured transports
+        try:
+            transports = bot.rpc.list_transports(dc_accid)
+            print("\n" + "=" * 50)
+            print("Configured Bot Transports (Relays):")
+            for t in transports:
+                addr = t.get('addr', '') if isinstance(t, dict) else getattr(t, 'addr', '')
+                print(f" - {addr}")
+        except Exception:
+            pass
+
         try:
             qrdata = bot.rpc.get_chat_securejoin_qr_code(dc_accid, None)
-            print("\n" + "=" * 50)
-            print("To add this bot, scan the QR code or copy the link below:\n")
+            print("\nTo add this bot, scan the QR code or copy the link below:\n")
 
             if qrcode:
                 qr = qrcode.QRCode(version=1, box_size=1, border=2)
