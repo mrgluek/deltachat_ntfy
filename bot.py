@@ -1065,16 +1065,33 @@ def _get_contact_fingerprint(bot, accid, contact_id, contact=None):
     """Returns the cryptographic fingerprint of a contact, trying various RPC methods and signatures."""
     self_fps = set()
     try:
-        # Get bot's own fingerprint reliably at the very beginning
-        bot_addr = bot.rpc.get_config(accid, "addr")
-        if bot_addr:
-            bot_contact_id = bot.rpc.get_contact_id_by_addr(accid, bot_addr)
-            if bot_contact_id:
-                enc_info_self = bot.rpc.get_contact_encryption_info(accid, bot_contact_id)
-                if enc_info_self:
-                    matches = re.findall(r'[0-9a-fA-F]{32,64}', "".join(enc_info_self.split()).replace(':', ''))
-                    self_fps.update(m.upper() for m in matches)
-    except: pass
+        # The most robust way to find "self" is to look through all contacts
+        all_contacts = bot.rpc.get_all_contacts(accid)
+        for c in all_contacts:
+            is_self = getattr(c, 'is_self', False) if not isinstance(c, dict) else c.get('is_self', False)
+            if is_self:
+                c_id = getattr(c, 'id', None) if not isinstance(c, dict) else c.get('id', None)
+                if c_id:
+                    enc_info_self = bot.rpc.get_contact_encryption_info(accid, c_id)
+                    if enc_info_self:
+                        matches = re.findall(r'[0-9a-fA-F]{32,64}', "".join(enc_info_self.split()).replace(':', ''))
+                        self_fps.update(m.upper() for m in matches)
+                for attr in ['fingerprint', 'key_fingerprint', 'public_key']:
+                    val = getattr(c, attr, None) if not isinstance(c, dict) else c.get(attr, None)
+                    if val:
+                        matches = re.findall(r'[0-9a-fA-F]{32,64}', str(val).replace(' ', '').replace(':', ''))
+                        self_fps.update(m.upper() for m in matches)
+    except Exception as e:
+        bot.logger.debug(f"Self-contact lookup failed: {e}")
+
+    # Fallback to ID 1 if above failed
+    if not self_fps:
+        try:
+            enc_info_self = bot.rpc.get_contact_encryption_info(accid, 1)
+            if enc_info_self:
+                matches = re.findall(r'[0-9a-fA-F]{32,64}', "".join(enc_info_self.split()).replace(':', ''))
+                self_fps.update(m.upper() for m in matches)
+        except: pass
 
     # 1. Try directly from the contact object if available
     if contact:
