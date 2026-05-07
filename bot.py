@@ -1080,8 +1080,9 @@ def _get_contact_fingerprint(bot, accid, contact_id, contact=None):
                 matches = re.findall(r'[0-9a-fA-F]{32,64}', str(val).replace(' ', '').replace(':', ''))
                 valid_matches = [m.upper() for m in matches if m.upper() not in self_fps]
                 if valid_matches:
-                    bot.logger.debug(f"Found fingerprint in contact.{attr}: {valid_matches[0]}")
-                    return valid_matches[0]
+                    fps = ",".join(valid_matches)
+                    bot.logger.debug(f"Found fingerprint(s) in contact.{attr}: {fps}")
+                    return fps
 
     # 2. Try get_contact_config(accid, contact_id, "fp")
     try:
@@ -1104,9 +1105,10 @@ def _get_contact_fingerprint(bot, accid, contact_id, contact=None):
                 # Filter out bot's own fingerprints
                 valid_matches = [m.upper() for m in matches if m.upper() not in self_fps]
                 if valid_matches:
-                    # In encryption info, we might have multiple fingerprints (Me and Contact).
-                    # We return the first one that is NOT the bot's own.
-                    return valid_matches[0]
+                    # Return all valid matches joined by comma
+                    fps = ",".join(valid_matches)
+                    bot.logger.debug(f"Found fingerprint(s): {fps}")
+                    return fps
         except Exception as e:
             bot.logger.debug(f"get_contact_encryption_info{args} failed: {e}")
             continue
