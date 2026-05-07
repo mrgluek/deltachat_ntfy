@@ -1081,24 +1081,43 @@ def _get_contact_fingerprint(bot, accid, contact_id, contact=None):
 
     # 3. Try get_contact_encryption_info
     # We try different argument variations to be safe across different bindings/core versions
+    self_fps = set()
+    try:
+        # Get bot's own fingerprint reliably
+        bot_addr = bot.rpc.get_config(accid, "addr")
+        if bot_addr:
+            bot_contact_id = bot.rpc.get_contact_id_by_addr(accid, bot_addr)
+            if bot_contact_id:
+                enc_info_self = bot.rpc.get_contact_encryption_info(accid, bot_contact_id)
+                if enc_info_self:
+                    matches = re.findall(r'[0-9a-fA-F]{32,64}', "".join(enc_info_self.split()).replace(':', ''))
+                    self_fps.update(m.upper() for m in matches)
+    except: pass
+
+    # Fallback to ID 1 if above failed
+    if not self_fps:
+        try:
+            enc_info_self = bot.rpc.get_contact_encryption_info(accid, 1)
+            if enc_info_self:
+                matches = re.findall(r'[0-9a-fA-F]{32,64}', "".join(enc_info_self.split()).replace(':', ''))
+                self_fps.update(m.upper() for m in matches)
+        except: pass
+
     for args in [(accid, contact_id), (contact_id,)]:
         try:
             # Try positional arguments first
             enc_info = bot.rpc.get_contact_encryption_info(*args)
             if enc_info:
-                # Log raw info for debugging (helps when fingerprint detection fails)
-                bot.logger.debug(f"Contact {contact_id} encryption info: {enc_info}")
-                import re
                 # Clean ALL whitespace including newlines
                 cleaned_info = "".join(enc_info.split()).replace(':', '')
                 # Look for hex strings between 32 and 64 characters (handles SHA-1 and Ed25519)
                 matches = re.findall(r'[0-9a-fA-F]{32,64}', cleaned_info)
-                if matches:
+                # Filter out bot's own fingerprints
+                valid_matches = [m.upper() for m in matches if m.upper() not in self_fps]
+                if valid_matches:
                     # In encryption info, we might have multiple fingerprints (Me and Contact).
-                    # We return all of them joined by comma, and let _is_dc_admin check.
-                    fps = ",".join(matches).upper()
-                    bot.logger.debug(f"Found fingerprint(s) in encryption info: {fps}")
-                    return fps
+                    # We return the first one that is NOT the bot's own.
+                    return valid_matches[0]
         except Exception as e:
             bot.logger.debug(f"get_contact_encryption_info{args} failed: {e}")
             continue
