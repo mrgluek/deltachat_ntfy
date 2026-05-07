@@ -1168,12 +1168,13 @@ def get_help_text(bot, accid, from_id):
     )
     
         
+    is_actually_admin = _is_dc_admin(bot, accid, from_id)
     if not admin_email:
         help_text += (
             f"**Initialisation Command:**\n"
             f"/initadmin — Claim bot ownership (if no admin is set)\n\n"
         )
-    elif _is_dc_admin(bot, accid, from_id):
+    elif is_actually_admin:
         admin_fp = database.get_admin_fingerprint()
         fp_suffix = f" ({admin_fp[-8:].upper()})" if admin_fp else ""
         help_text += f"👑 **Admin:** `{admin_email}`{fp_suffix}\n\n"
