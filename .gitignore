@@ -24,3 +24,6 @@ data/
 # Local configuration
 .env
 docker-compose.override.yml
+
+# Local overrides (healthchecks, etc.)
+.env.local

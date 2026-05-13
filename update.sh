@@ -2,9 +2,20 @@
 set -e
 cd "$(dirname "$0")"
 
+# --- HEALTHCHECKS SUPPORT ---
+# Create a .env.local file in this directory to enable monitoring:
+#   echo 'MONITOR_URL=https://ping.gluek.info/ping/YOUR-UUID' > .env.local
+[ -f .env.local ] && source .env.local
+
+hc_ping() {
+    [ -n "$MONITOR_URL" ] && curl -fsS -m 10 --retry 5 -o /dev/null "${MONITOR_URL}${1:-}" || true
+}
+trap 'hc_ping /fail' ERR
+hc_ping /start
+
+# --- BACKUP REMOTE ---
 BACKUP_REMOTE_URL="https://git.gluek.info/gluek/deltachat_ntfy"
 
-# Ensure the backup remote is configured
 if ! git remote get-url backup &>/dev/null; then
     echo "➕ Adding Forgejo mirror as 'backup' remote..."
     git remote add backup "$BACKUP_REMOTE_URL"
@@ -15,11 +26,9 @@ echo "Checking for updates..."
 # --- FALLBACK LOGIC ---
 ACTIVE_REMOTE=""
 
-# Try fetching from GitHub (origin)
 if git fetch origin; then
     ACTIVE_REMOTE="origin"
     echo "✅ GitHub (origin) is reachable."
-# If GitHub fails, try Forgejo (backup)
 elif git fetch backup; then
     ACTIVE_REMOTE="backup"
     echo "⚠️ GitHub unreachable. Using Forgejo (backup) instead."
@@ -28,7 +37,7 @@ else
     exit 1
 fi
 
-# --- ROBUST BRANCH DETECTION LOGIC ---
+# --- BRANCH DETECTION ---
 REMOTE_REF=$(git branch -r | grep "^  $ACTIVE_REMOTE/" | grep -v "HEAD" | head -n 1 | sed 's/^[[:space:]]*//')
 
 if [ -z "$REMOTE_REF" ]; then
@@ -38,8 +47,6 @@ fi
 
 REMOTE=$(git rev-parse $REMOTE_REF)
 BRANCH_NAME=$(git rev-parse --abbrev-ref $REMOTE_REF)
-
-# -------------------------
 
 LOCAL=$(git rev-parse HEAD)
 
@@ -61,3 +68,5 @@ if [ "$LOCAL" != "$REMOTE" ] || [ "$FORCE" = true ]; then
 else
     echo "✅ Already up to date (via $ACTIVE_REMOTE). Use -f to force rebuild."
 fi
+
+hc_ping
