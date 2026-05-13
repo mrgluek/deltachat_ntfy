@@ -1544,7 +1544,7 @@ def list_command(bot, accid, event):
         
     bot_url = database.get_config("bot_url") or "https://ntfy.gluek.info"
     base_url = bot_url.rstrip('/')
-    topics_list = "\n".join([f"- {base_url}/{t}" for t in topics])
+    topics_list = "\n".join([f"- [{t}]({base_url}/{t})" for t in topics])
     _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"📋 Subscribed topics:\n{topics_list}"))
 
 @dc_cli.on(events.NewMessage(command="/last"))
