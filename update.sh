@@ -46,7 +46,7 @@ if [ -z "$REMOTE_REF" ]; then
 fi
 
 REMOTE=$(git rev-parse $REMOTE_REF)
-BRANCH_NAME=$(git rev-parse --abbrev-ref $REMOTE_REF)
+BRANCH_NAME=${REMOTE_REF#$ACTIVE_REMOTE/}
 
 LOCAL=$(git rev-parse HEAD)
 
