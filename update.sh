@@ -5,7 +5,7 @@ cd "$(dirname "$0")"
 # --- HEALTHCHECKS SUPPORT ---
 # Create a .env.local file in this directory to enable monitoring:
 #   echo 'MONITOR_URL=https://ping.gluek.info/ping/YOUR-UUID' > .env.local
-[ -f .env.local ] && source .env.local
+[ -f .env.local ] && . .env.local
 
 hc_ping() {
     [ -n "$MONITOR_URL" ] && curl -fsS -m 10 --retry 5 -o /dev/null "${MONITOR_URL}${1:-}" || true
