@@ -313,7 +313,7 @@ async def handle_ntfy_post(request):
                     
                     # Track sending stats
                     try:
-                        addr = dc_bot_instance.rpc.get_config(acc_id, "addr")
+                        addr = dc_bot_instance.rpc.get_config(acc_id, "configured_addr") or dc_bot_instance.rpc.get_config(acc_id, "addr")
                         if addr:
                             database.increment_transport_sent(addr)
                     except Exception:
@@ -1364,7 +1364,7 @@ def _publish_from_chat(bot, accid, topic, message, sender_chat_id, title=""):
                     
                     # Track sending stats
                     try:
-                        addr = dc_bot_instance.rpc.get_config(acc_id, "addr")
+                        addr = dc_bot_instance.rpc.get_config(acc_id, "configured_addr") or dc_bot_instance.rpc.get_config(acc_id, "addr")
                         if addr:
                             database.increment_transport_sent(addr)
                     except Exception:
