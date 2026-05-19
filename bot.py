@@ -1718,6 +1718,7 @@ def transports_command(bot, accid, event):
     for s in database.get_all_transport_stats():
         stats_map[s['addr']] = s
 
+    active_addr = bot.rpc.get_config(accid, "configured_addr") or bot.rpc.get_config(accid, "addr")
     transport_addrs = []
     for t in transports:
         addr = t.get('addr', '') if isinstance(t, dict) else getattr(t, 'addr', '')
@@ -1725,8 +1726,8 @@ def transports_command(bot, accid, event):
 
     reply = f"🔌 **Mail Relays (Transports)**\n\nStatus: {connectivity_label}\n\n"
 
-    for i, addr in enumerate(transport_addrs):
-        role = "🏠 Primary" if i == 0 else "🔄 Backup"
+    for addr in transport_addrs:
+        role = "🏠 Primary" if addr == active_addr else "🔄 Backup"
         reply += f"**{role}:** `{addr}`\n"
 
         stats = stats_map.get(addr)
