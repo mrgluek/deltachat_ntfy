@@ -1302,12 +1302,13 @@ def on_new_message(bot, accid, event):
             is_private = (getattr(chat_info, "type", 1) == 1)
             
         if is_private:
-            if not bot.rpc.get_contact_config(accid, msg.from_id, "greeted"):
+            greeted_key = f"greeted_{msg.from_id}"
+            if not database.get_config(greeted_key):
                 bot.logger.info(f"New user detected, sending welcome to chat {msg.chat_id}")
                 help_text = get_help_text(bot, accid, msg.from_id)
                 welcome_msg = f"👋 Welcome to Ntfy Bot!\n\n{help_text}"
                 bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=welcome_msg))
-                bot.rpc.set_contact_config(accid, msg.from_id, "greeted", "1")
+                database.set_config(greeted_key, "1")
     except Exception as e:
         bot.logger.error(f"Error in greeting check: {e}")
 
