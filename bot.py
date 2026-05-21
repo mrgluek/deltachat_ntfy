@@ -1306,8 +1306,7 @@ def on_new_message(bot, accid, event):
             if not database.get_config(greeted_key):
                 bot.logger.info(f"New user detected, sending welcome to chat {msg.chat_id}")
                 help_text = get_help_text(bot, accid, msg.from_id)
-                welcome_msg = f"👋 Welcome to Ntfy Bot!\n\n{help_text}"
-                bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=welcome_msg))
+                bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=help_text))
                 database.set_config(greeted_key, "1")
     except Exception as e:
         bot.logger.error(f"Error in greeting check: {e}")
