@@ -1,0 +1,14 @@
+.git
+.gitignore
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+data/
+*.db
+*.db-journal
+docker-compose.yml
+CHANGELOG.md
+README.md
+CONTEXT.md
+Caddyfile
