@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2026-06-02]
+
+### Fixed
+- **UnicodeEncodeError with surrogate escape headers**: Implemented a robust sanitization utility to decode and strip invalid surrogate characters from incoming HTTP headers (such as `X-Title` or `Title`) sent by non-UTF-8 clients (like Windows PowerShell 5.1). Added auto-detection and correct decoding for Russian `CP1251` and Western `CP1252` encoding pages to safely preserve non-English titles.
+
 ## [2026-05-22]
 
 ### Changed

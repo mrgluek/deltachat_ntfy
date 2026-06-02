@@ -60,6 +60,26 @@ def is_rate_limited(ip):
         return True
     rate_limit_cache[ip].append(now)
     return False
+def sanitize_string(s: str) -> str:
+    if not isinstance(s, str):
+        return s
+    try:
+        s.encode('utf-8')
+        return s
+    except UnicodeEncodeError:
+        try:
+            b = s.encode('utf-8', 'surrogateescape')
+            try:
+                return b.decode('utf-8')
+            except UnicodeDecodeError:
+                for encoding in ('cp1251', 'cp1252'):
+                    try:
+                        return b.decode(encoding)
+                    except UnicodeDecodeError:
+                        continue
+                return b.decode('utf-8', 'replace')
+        except Exception:
+            return "".join(c for c in s if not (0xD800 <= ord(c) <= 0xDFFF))
 
 def get_priority_emoji(priority_raw: str) -> str:
     priority_map = {
@@ -238,7 +258,16 @@ async def handle_ntfy_post(request):
         except Exception as e:
             logger.error(f"Error downloading attachment from {attach_url}: {e}")
 
-    
+    # Sanitize all strings to prevent UnicodeEncodeError with surrogate characters
+    topic = sanitize_string(topic)
+    title = sanitize_string(title)
+    priority_raw = sanitize_string(priority_raw)
+    tags_raw = sanitize_string(tags_raw)
+    click_raw = sanitize_string(click_raw)
+    attach_url = sanitize_string(attach_url)
+    filename = sanitize_string(filename)
+    message = sanitize_string(message)
+
     if not topic:
         logger.warning(f"Request to {request.path} failed: Topic required")
         return web.Response(status=400, text="Topic required. Use /{topic}, Topic header or 'topic' in JSON.")
