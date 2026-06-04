@@ -13,7 +13,13 @@ services:
       - DC_DB_DIR=/app/data
       - DB_PATH=/app/data/ntfy.db
       - AUTH_TOKEN=${AUTH_TOKEN:-} # Can be set in a local .env file
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
   # caddy:
+
   #   image: caddy:latest
   #   restart: always
   #   ports:
