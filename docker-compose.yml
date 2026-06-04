@@ -3,6 +3,11 @@ services:
     container_name: deltachat_ntfy_bot
     build: .
     restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     volumes:
       - ./data:/app/data
       - ./data/ntfybot:/root/.config/ntfybot
