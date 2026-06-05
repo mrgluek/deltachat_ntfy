@@ -17,6 +17,7 @@ Start the bot. Add it to Delta Chat. Message the bot:
 - `/addtransport` to add a backup mail relay (admin only)
 - `/rmtransport <addr>` to remove a mail relay (admin only)
 - `/setprimary <addr>` to switch the primary mail relay (admin only)
+- `/resilient` to toggle resilient sending mode across all relays (admin only)
 - `/help` to see all available commands
 
 ### API Subscription (JSON Stream)
