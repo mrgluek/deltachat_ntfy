@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- **Resilient Sending Mode**: Added `/resilient` admin command to toggle resilient mode. When enabled, each outgoing message is sent through all configured mail relays sequentially to bypass chatmail blocking issues.
+- **Resilient Sending Mode**: Added `/resilient` admin command to toggle resilient mode. When enabled, each outgoing message is sent through all configured mail relays using resending mechanism to bypass chatmail blocking issues while ensuring deduplication into a single message bubble on the recipient client.
 
 ## [2026-06-02]
 
