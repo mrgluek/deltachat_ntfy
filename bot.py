@@ -44,6 +44,16 @@ RATE_LIMIT_WINDOW = 60 # seconds
 RATE_LIMIT_MAX = int(os.getenv("RATE_LIMIT_MAX", "30")) # messages per minute per IP
 rate_limit_cache = collections.defaultdict(list)
 listeners = collections.defaultdict(list) # Pub/Sub for JSON streams
+web_server_loop = None
+
+def push_to_listeners(topic, msg_payload):
+    if topic in listeners:
+        for q in listeners[topic]:
+            if web_server_loop:
+                try:
+                    web_server_loop.call_soon_threadsafe(q.put_nowait, msg_payload)
+                except Exception as e:
+                    logger.error(f"Failed to push to listener queue: {e}")
 
 def get_client_ip(request):
     """Get real client IP, respecting X-Forwarded-For from Caddy."""
@@ -280,25 +290,20 @@ async def handle_ntfy_post(request):
     database.add_notification(topic, title, message, priority_int)
 
     # Pub/Sub push
-    if topic in listeners:
-        msg_payload = {
-            "id": f"ntfy-{int(time.time()*1000)}",
-            "time": int(time.time()),
-            "event": "message",
-            "topic": topic,
-            "message": message
-        }
-        if title: msg_payload["title"] = title
-        if priority_int: msg_payload["priority"] = priority_int
-        if tags_raw: msg_payload["tags"] = [t.strip() for t in tags_raw.split(',') if t.strip()]
-        if click_raw: msg_payload["click"] = click_raw
-        if attach_url: msg_payload["attach"] = attach_url
-        
-        for q in listeners[topic]:
-            try:
-                q.put_nowait(msg_payload)
-            except asyncio.QueueFull:
-                pass
+    msg_payload = {
+        "id": f"ntfy-{int(time.time()*1000)}",
+        "time": int(time.time()),
+        "event": "message",
+        "topic": topic,
+        "message": message
+    }
+    if title: msg_payload["title"] = title
+    if priority_int: msg_payload["priority"] = priority_int
+    if tags_raw: msg_payload["tags"] = [t.strip() for t in tags_raw.split(',') if t.strip()]
+    if click_raw: msg_payload["click"] = click_raw
+    if attach_url: msg_payload["attach"] = attach_url
+    
+    push_to_listeners(topic, msg_payload)
 
     # Broadcast to subscribers
     subscribers = database.get_subscribers(topic)
@@ -1404,22 +1409,17 @@ async def publish_stats():
     database.add_notification(topic, title, message, priority_int)
 
     # Pub/Sub push
-    if topic in listeners:
-        msg_payload = {
-            "id": f"ntfy-{int(time.time()*1000)}",
-            "time": int(time.time()),
-            "event": "message",
-            "topic": topic,
-            "message": message,
-            "title": title,
-            "priority": priority_int,
-            "tags": [tags_raw]
-        }
-        for q in listeners[topic]:
-            try:
-                q.put_nowait(msg_payload)
-            except asyncio.QueueFull:
-                pass
+    msg_payload = {
+        "id": f"ntfy-{int(time.time()*1000)}",
+        "time": int(time.time()),
+        "event": "message",
+        "topic": topic,
+        "message": message,
+        "title": title,
+        "priority": priority_int,
+        "tags": [tags_raw]
+    }
+    push_to_listeners(topic, msg_payload)
 
     # Broadcast to subscribers
     subscribers = database.get_subscribers(topic)
@@ -1463,6 +1463,8 @@ async def _stats_publisher_loop():
             logger.error(f"Failed to publish stats: {e}")
 
 async def _run_web_server():
+    global web_server_loop
+    web_server_loop = asyncio.get_running_loop()
     app = web.Application()
     app.router.add_get('/', handle_index)
     app.router.add_get('/robots.txt', handle_robots)
@@ -1992,21 +1994,17 @@ def _publish_from_chat(bot, accid, topic, message, sender_chat_id, title=""):
     database.add_notification(topic, title, message, priority_int)
 
     # Pub/Sub push for JSON streaming clients
-    if topic in listeners:
-        msg_payload = {
-            "id": f"ntfy-{int(time.time()*1000)}",
-            "time": int(time.time()),
-            "event": "message",
-            "topic": topic,
-            "message": message
-        }
-        if title:
-            msg_payload["title"] = title
-        for q in listeners[topic]:
-            try:
-                q.put_nowait(msg_payload)
-            except asyncio.QueueFull:
-                pass
+    msg_payload = {
+        "id": f"ntfy-{int(time.time()*1000)}",
+        "time": int(time.time()),
+        "event": "message",
+        "topic": topic,
+        "message": message
+    }
+    if title:
+        msg_payload["title"] = title
+        
+    push_to_listeners(topic, msg_payload)
 
     # Broadcast to all subscribers
     subscribers = database.get_subscribers(topic)
