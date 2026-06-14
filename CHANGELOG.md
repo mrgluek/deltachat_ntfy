@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Topic Web UI Message Publishing**: Added a beautiful, interactive, and collapsible form directly on the topic view page (e.g. `/{topic}`) to publish notifications directly from the browser. Supports message content, custom active priority states, title, tags, click URLs, and server token authorization with secure `localStorage` persistence.
 - **Real-time Updates on Topic Pages**: Integrated NDJSON stream subscriber client on the topic view page. New notifications now slide down and fade in automatically in real-time without requiring a page refresh. Includes connection drop recovery and auto-reconnection.
 
+### Fixed
+- **Topic stream prefix mismatch**: Fixed an incorrect dollar sign prefix in the browser frontend fetch request URL for live updates, ensuring the stream listens to the correct topic (e.g., `/chat-ru/json` instead of `/$chat-ru/json`) and receives new notifications immediately.
+
 ## [2026-06-05]
 
 ### Added

@@ -1093,7 +1093,7 @@ async def handle_topic_view(request):
             
             async function connect() {{
                 try {{
-                    const response = await fetch(`/${topic}/json?since=${{sinceParam}}`);
+                    const response = await fetch(`/{topic}/json?since=${{sinceParam}}`);
                     if (!response.ok) throw new Error('Status ' + response.status);
                     
                     const reader = response.body.getReader();
