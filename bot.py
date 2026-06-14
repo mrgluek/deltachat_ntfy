@@ -1093,7 +1093,7 @@ async def handle_topic_view(request):
                         if (done) break;
                         
                         buffer += decoder.decode(value, {{ stream: true }});
-                        const lines = buffer.split('\n');
+                        const lines = buffer.split('\\n');
                         
                         buffer = lines.pop();
                         
