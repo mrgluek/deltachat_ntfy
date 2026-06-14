@@ -47,13 +47,20 @@ listeners = collections.defaultdict(list) # Pub/Sub for JSON streams
 web_server_loop = None
 
 def push_to_listeners(topic, msg_payload):
+    logger.info(f"push_to_listeners: topic='{topic}', listeners={list(listeners.keys())}, web_server_loop={web_server_loop}")
     if topic in listeners:
+        logger.info(f"push_to_listeners: found {len(listeners[topic])} queues for '{topic}'")
         for q in listeners[topic]:
             if web_server_loop:
                 try:
                     web_server_loop.call_soon_threadsafe(q.put_nowait, msg_payload)
+                    logger.info("push_to_listeners: successfully queued event via call_soon_threadsafe")
                 except Exception as e:
                     logger.error(f"Failed to push to listener queue: {e}")
+            else:
+                logger.warning("push_to_listeners: web_server_loop is None!")
+    else:
+        logger.info(f"push_to_listeners: no listeners subscribed to '{topic}'")
 
 def get_client_ip(request):
     """Get real client IP, respecting X-Forwarded-For from Caddy."""
