@@ -2,6 +2,8 @@
 
 A bot for Delta Chat that emulates the backend of [ntfy.sh](https://ntfy.sh) and broadcasts HTTP POST requests to subscribed Delta Chat users/groups.
 
+It provides a modern web interface for each topic (e.g., `https://ntfy.gluek.info/mytopic`) displaying historical notifications, streaming new notifications in real-time, and allowing users to publish notifications directly from their browser.
+
 ## Usage
 
 Start the bot. Add it to Delta Chat. Message the bot:

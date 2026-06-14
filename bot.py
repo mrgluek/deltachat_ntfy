@@ -538,6 +538,7 @@ async def handle_topic_view(request):
     display_host = parsed_url.netloc or "ntfy.gluek.info"
 
     notifications = database.get_recent_notifications([topic], limit=50)
+    server_tz = datetime.datetime.now().astimezone().tzname()
     
     auth_field_html = ""
     if AUTH_TOKEN:
@@ -910,6 +911,20 @@ async def handle_topic_view(request):
         .password-toggle:hover {{
             color: #adbac7;
         }}
+        
+        @keyframes slideIn {{
+            from {{
+                opacity: 0;
+                transform: translateY(-10px);
+            }}
+            to {{
+                opacity: 1;
+                transform: translateY(0);
+            }}
+        }}
+        .notification-card.new-card {{
+            animation: slideIn 0.3s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+        }}
     </style>
     <script>
         let currentPriority = 3;
@@ -939,6 +954,9 @@ async def handle_topic_view(request):
                     tokenInput.value = savedToken;
                 }}
             }}
+            
+            // Start listening for real-time updates
+            startLiveUpdates();
         }});
 
         function togglePublishForm() {{
@@ -1043,6 +1061,129 @@ async def handle_topic_view(request):
             }}
         }}
 
+        async function startLiveUpdates() {{
+            let maxId = 0;
+            document.querySelectorAll('.notification-card').forEach(card => {{
+                const idStr = card.id.replace('notif-', '');
+                if (/^\\d+$/.test(idStr)) {{
+                    const id = parseInt(idStr);
+                    if (id > maxId) maxId = id;
+                }}
+            }});
+            
+            const seenIds = new Set();
+            document.querySelectorAll('.notification-card').forEach(card => {{
+                seenIds.add(card.id.replace('notif-', ''));
+            }});
+
+            const topic = '{topic}';
+            let sinceParam = maxId > 0 ? maxId : 'all';
+            
+            async function connect() {{
+                try {{
+                    const response = await fetch(`/${topic}/json?since=${{sinceParam}}`);
+                    if (!response.ok) throw new Error('Status ' + response.status);
+                    
+                    const reader = response.body.getReader();
+                    const decoder = new TextDecoder();
+                    let buffer = '';
+                    
+                    while (true) {{
+                        const {{ value, done }} = await reader.read();
+                        if (done) break;
+                        
+                        buffer += decoder.decode(value, {{ stream: true }});
+                        const lines = buffer.split('\n');
+                        
+                        buffer = lines.pop();
+                        
+                        for (const line of lines) {{
+                            if (line.trim()) {{
+                                try {{
+                                    const data = JSON.parse(line);
+                                    if (data.event === 'message') {{
+                                        handleLiveMessage(data);
+                                    }}
+                                }} catch (e) {{
+                                    console.error('Error parsing line:', e);
+                                }}
+                            }}
+                        }}
+                    }}
+                }} catch (err) {{
+                    console.warn('Live update connection lost, reconnecting in 5s...', err);
+                    setTimeout(connect, 5000);
+                }}
+            }}
+            
+            function handleLiveMessage(msg) {{
+                if (seenIds.has(msg.id)) return;
+                seenIds.add(msg.id);
+                
+                if (/^\\d+$/.test(msg.id)) {{
+                    const numId = parseInt(msg.id);
+                    if (numId > sinceParam) {{
+                        sinceParam = numId;
+                    }}
+                }}
+                
+                const emptyState = document.querySelector('.empty-state');
+                if (emptyState) {{
+                    emptyState.remove();
+                }}
+                
+                const card = document.createElement('div');
+                card.className = 'notification-card new-card';
+                card.id = 'notif-' + msg.id;
+                
+                const priority = msg.priority || 3;
+                
+                const date = new Date(msg.time * 1000);
+                const dtStr = date.getFullYear() + '-' + 
+                    String(date.getMonth() + 1).padStart(2, '0') + '-' + 
+                    String(date.getDate()).padStart(2, '0') + ' ' + 
+                    String(date.getHours()).padStart(2, '0') + ':' + 
+                    String(date.getMinutes()).padStart(2, '0') + ':' + 
+                    String(date.getSeconds()).padStart(2, '0');
+                    
+                const priorityEmoji = getPriorityEmoji(priority);
+                
+                const linkify = (text) => {{
+                    if (!text) return '';
+                    const urlRegex = /(\\b(https?|ftp|file):\\/\\/[-A-Z0-9+&@#\\/%?=~_|!:,.;]*[-A-Z0-9+&@#\\/%=~_|])/ig;
+                    return text.replace(urlRegex, function(url) {{
+                        return '<a href="' + url + '" target="_blank" rel="noopener noreferrer">' + url + '</a>';
+                    }});
+                }};
+                
+                card.innerHTML = `
+                    <div class="priority-indicator priority-${{priority}}"></div>
+                    <div class="meta">
+                        <span>${{priorityEmoji}} Priority ${{priority}}</span>
+                        <span title="Server Timezone: {server_tz}">${{dtStr}}</span>
+                    </div>
+                    ${{msg.title ? `<span class="title">${{linkify(msg.title)}}</span>` : ''}}
+                    <div class="message">${{linkify(msg.message)}}</div>
+                    <span class="copy-btn" onclick="copyNotif('${{msg.id}}')" title="Copy to clipboard">📋</span>
+                `;
+                
+                const list = document.querySelector('.notification-list');
+                list.insertBefore(card, list.firstChild);
+            }}
+            
+            function getPriorityEmoji(priority) {{
+                switch(parseInt(priority)) {{
+                    case 5: return '🔴';
+                    case 4: return '🟠';
+                    case 2: return '🔵';
+                    case 1: return '⚪️';
+                    default: return '🟢';
+                }}
+            }}
+            
+            connect();
+        }}
+
         function copyText(text, btnElem) {{
             navigator.clipboard.writeText(text).then(() => {{
                 const oldIcon = btnElem.innerText;
@@ -1132,7 +1273,6 @@ async def handle_topic_view(request):
         
         <div class="notification-list">
 """
-    server_tz = datetime.datetime.now().astimezone().tzname()
     if not notifications:
         html += '<div class="empty-state">No notifications found for this topic in the last 24 hours.</div>'
     else:
