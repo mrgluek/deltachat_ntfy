@@ -539,6 +539,18 @@ async def handle_topic_view(request):
 
     notifications = database.get_recent_notifications([topic], limit=50)
     
+    auth_field_html = ""
+    if AUTH_TOKEN:
+        auth_field_html = """
+                    <div class="form-group" style="margin-bottom: 1rem;">
+                        <label for="pub-token">Auth Token *</label>
+                        <div class="input-with-toggle">
+                            <input type="password" class="form-control" id="pub-token" placeholder="Enter server AUTH_TOKEN" required>
+                            <span class="password-toggle" onclick="togglePasswordVisibility()">👁️</span>
+                        </div>
+                    </div>
+        """
+
     html = f"""<!DOCTYPE html>
 <html>
 <head>
@@ -712,8 +724,325 @@ async def handle_topic_view(request):
             body {{ padding: 1rem; }}
             .topic-path {{ font-size: 1rem; }}
         }}
+
+        .publish-card {{
+            background: rgba(28, 33, 40, 0.6);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(68, 76, 86, 0.5);
+            border-radius: 8px;
+            margin-bottom: 2rem;
+            padding: 1.2rem;
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3);
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }}
+        .publish-header {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            cursor: pointer;
+            user-select: none;
+        }}
+        .publish-header h3 {{
+            margin: 0;
+            font-size: 1.1rem;
+            color: #539bf5;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }}
+        .publish-toggle-icon {{
+            transition: transform 0.3s;
+            font-size: 0.8rem;
+            color: #768390;
+        }}
+        .publish-card.collapsed .publish-toggle-icon {{
+            transform: rotate(-90deg);
+        }}
+        .publish-body {{
+            margin-top: 1.2rem;
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+            transition: max-height 0.3s ease-out, opacity 0.3s ease-out;
+            max-height: 1000px;
+            opacity: 1;
+            overflow: hidden;
+        }}
+        .publish-card.collapsed .publish-body {{
+            max-height: 0;
+            opacity: 0;
+            margin-top: 0;
+        }}
+        .form-group {{
+            display: flex;
+            flex-direction: column;
+            gap: 0.4rem;
+        }}
+        .form-row {{
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1rem;
+        }}
+        @media (max-width: 600px) {{
+            .form-row {{
+                grid-template-columns: 1fr;
+            }}
+        }}
+        .form-group label {{
+            font-size: 0.85rem;
+            color: #768390;
+            font-weight: 500;
+        }}
+        .form-control {{
+            background-color: #22272e;
+            border: 1px solid #444c56;
+            border-radius: 6px;
+            color: #adbac7;
+            padding: 0.6rem 0.8rem;
+            font-size: 0.9rem;
+            transition: border-color 0.2s, box-shadow 0.2s;
+            font-family: inherit;
+            box-sizing: border-box;
+            width: 100%;
+        }}
+        .form-control:focus {{
+            outline: none;
+            border-color: #539bf5;
+            box-shadow: 0 0 0 3px rgba(83, 155, 245, 0.15);
+        }}
+        textarea.form-control {{
+            resize: vertical;
+            min-height: 80px;
+        }}
+        .priority-select-wrapper {{
+            display: flex;
+            gap: 0.4rem;
+            flex-wrap: wrap;
+        }}
+        .priority-btn {{
+            flex: 1;
+            min-width: 60px;
+            padding: 0.5rem;
+            border-radius: 6px;
+            border: 1px solid #444c56;
+            background-color: #22272e;
+            color: #768390;
+            font-size: 0.85rem;
+            cursor: pointer;
+            transition: all 0.2s;
+            text-align: center;
+            font-weight: 500;
+            user-select: none;
+        }}
+        .priority-btn:hover {{
+            border-color: #768390;
+            color: #adbac7;
+        }}
+        .priority-btn.active[data-priority="1"] {{ background-color: rgba(118, 131, 144, 0.15); border-color: #768390; color: #768390; }}
+        .priority-btn.active[data-priority="2"] {{ background-color: rgba(83, 155, 245, 0.15); border-color: #539bf5; color: #539bf5; }}
+        .priority-btn.active[data-priority="3"] {{ background-color: rgba(63, 185, 80, 0.15); border-color: #3fb950; color: #3fb950; }}
+        .priority-btn.active[data-priority="4"] {{ background-color: rgba(240, 136, 62, 0.15); border-color: #f0883e; color: #f0883e; }}
+        .priority-btn.active[data-priority="5"] {{ background-color: rgba(248, 81, 73, 0.15); border-color: #f85149; color: #f85149; }}
+
+        .btn-publish-submit {{
+            background-color: #31958b;
+            color: white;
+            border: none;
+            padding: 0.7rem 1.2rem;
+            border-radius: 6px;
+            font-weight: 600;
+            font-size: 0.95rem;
+            cursor: pointer;
+            transition: background-color 0.2s, transform 0.1s;
+            align-self: flex-start;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }}
+        .btn-publish-submit:hover {{
+            background-color: #3aa69a;
+        }}
+        .btn-publish-submit:active {{
+            transform: scale(0.98);
+        }}
+        .btn-publish-submit:disabled {{
+            background-color: #444c56;
+            color: #768390;
+            cursor: not-allowed;
+        }}
+        
+        .publish-status {{
+            padding: 0.6rem 0.8rem;
+            border-radius: 6px;
+            font-size: 0.9rem;
+            display: none;
+        }}
+        .publish-status.success {{
+            display: block;
+            background-color: rgba(63, 185, 80, 0.15);
+            border: 1px solid #3fb950;
+            color: #3fb950;
+        }}
+        .publish-status.error {{
+            display: block;
+            background-color: rgba(248, 81, 73, 0.15);
+            border: 1px solid #f85149;
+            color: #f85149;
+        }}
+        
+        .input-with-toggle {{
+            position: relative;
+            display: flex;
+            align-items: center;
+        }}
+        .input-with-toggle input {{
+            padding-right: 2.5rem;
+        }}
+        .password-toggle {{
+            position: absolute;
+            right: 0.8rem;
+            cursor: pointer;
+            user-select: none;
+            color: #768390;
+            font-size: 0.9rem;
+        }}
+        .password-toggle:hover {{
+            color: #adbac7;
+        }}
     </style>
     <script>
+        let currentPriority = 3;
+
+        document.addEventListener('DOMContentLoaded', () => {{
+            // Restore form collapsed/expanded state
+            const isCollapsed = localStorage.getItem('publish_collapsed') !== 'false';
+            const card = document.getElementById('publishCard');
+            if (isCollapsed) {{
+                card.classList.add('collapsed');
+            }} else {{
+                card.classList.remove('collapsed');
+                document.getElementById('publishToggleIcon').innerText = '▲';
+            }}
+            
+            // Restore priority
+            const savedPriority = localStorage.getItem('publish_priority');
+            if (savedPriority) {{
+                setPriority(parseInt(savedPriority));
+            }}
+            
+            // Restore auth token if exists
+            const tokenInput = document.getElementById('pub-token');
+            if (tokenInput) {{
+                const savedToken = localStorage.getItem('publish_token');
+                if (savedToken) {{
+                    tokenInput.value = savedToken;
+                }}
+            }}
+        }});
+
+        function togglePublishForm() {{
+            const card = document.getElementById('publishCard');
+            const icon = document.getElementById('publishToggleIcon');
+            const isCollapsed = card.classList.toggle('collapsed');
+            icon.innerText = isCollapsed ? '▼' : '▲';
+            localStorage.setItem('publish_collapsed', isCollapsed);
+        }}
+
+        function setPriority(level) {{
+            currentPriority = level;
+            localStorage.setItem('publish_priority', level);
+            document.querySelectorAll('.priority-btn').forEach(btn => {{
+                if (parseInt(btn.getAttribute('data-priority')) === level) {{
+                    btn.classList.add('active');
+                }} else {{
+                    btn.classList.remove('active');
+                }}
+            }});
+        }}
+
+        function togglePasswordVisibility() {{
+            const tokenInput = document.getElementById('pub-token');
+            const toggleIcon = document.querySelector('.password-toggle');
+            if (tokenInput.type === 'password') {{
+                tokenInput.type = 'text';
+                toggleIcon.innerText = '🔒';
+            }} else {{
+                tokenInput.type = 'password';
+                toggleIcon.innerText = '👁️';
+            }}
+        }}
+
+        async function submitPublishForm(event) {{
+            event.preventDefault();
+            
+            const message = document.getElementById('pub-message').value;
+            const title = document.getElementById('pub-title').value;
+            const tags = document.getElementById('pub-tags').value;
+            const click = document.getElementById('pub-click').value;
+            const tokenInput = document.getElementById('pub-token');
+            const token = tokenInput ? tokenInput.value : '';
+            
+            const statusDiv = document.getElementById('pub-status');
+            const submitBtn = document.getElementById('pub-submit-btn');
+            
+            // Show loading state
+            submitBtn.disabled = true;
+            submitBtn.querySelector('span').innerText = 'Sending...';
+            statusDiv.className = 'publish-status';
+            statusDiv.style.display = 'none';
+            
+            // Save token
+            if (token) {{
+                localStorage.setItem('publish_token', token);
+            }}
+            
+            const headers = {{
+                'Content-Type': 'application/json'
+            }};
+            
+            if (token) {{
+                headers['Authorization'] = 'Bearer ' + token;
+            }}
+            
+            const payload = {{
+                message: message,
+                priority: currentPriority
+            }};
+            if (title) payload.title = title;
+            if (tags) payload.tags = tags.split(',').map(t => t.trim()).filter(t => t.length > 0);
+            if (click) payload.click = click;
+            
+            try {{
+                const response = await fetch('/{topic}', {{
+                    method: 'POST',
+                    headers: headers,
+                    body: JSON.stringify(payload)
+                }});
+                
+                if (response.ok) {{
+                    statusDiv.innerText = 'Message published successfully!';
+                    statusDiv.className = 'publish-status success';
+                    
+                    document.getElementById('pub-message').value = '';
+                    
+                    setTimeout(() => {{
+                        window.location.reload();
+                    }}, 1000);
+                }} else {{
+                    const text = await response.text();
+                    statusDiv.innerText = 'Failed to publish (' + response.status + '): ' + text;
+                    statusDiv.className = 'publish-status error';
+                }}
+            }} catch (err) {{
+                statusDiv.innerText = 'Error: ' + err.message;
+                statusDiv.className = 'publish-status error';
+            }} finally {{
+                submitBtn.disabled = false;
+                submitBtn.querySelector('span').innerText = 'Send';
+            }}
+        }}
+
         function copyText(text, btnElem) {{
             navigator.clipboard.writeText(text).then(() => {{
                 const oldIcon = btnElem.innerText;
@@ -747,6 +1076,57 @@ async def handle_topic_view(request):
             <div class="actions">
                 <span class="copy-btn-inline" onclick="copyText('/sub {topic}', this)" title="Copy '/sub {topic}' command">📋</span>
                 <a href="{subscribe_link}" class="btn-subscribe">Subscribe</a>
+            </div>
+        </div>
+
+        <div class="publish-card collapsed" id="publishCard">
+            <div class="publish-header" onclick="togglePublishForm()">
+                <h3>✏️ Send Notification</h3>
+                <span class="publish-toggle-icon" id="publishToggleIcon">▼</span>
+            </div>
+            <div class="publish-body">
+                <form id="publishForm" onsubmit="submitPublishForm(event)">
+                    <div class="form-group" style="margin-bottom: 1rem;">
+                        <label for="pub-message">Message *</label>
+                        <textarea class="form-control" id="pub-message" placeholder="Type your message here..." required></textarea>
+                    </div>
+                    
+                    <div class="form-row" style="margin-bottom: 1rem;">
+                        <div class="form-group">
+                            <label for="pub-title">Title</label>
+                            <input type="text" class="form-control" id="pub-title" placeholder="Optional title">
+                        </div>
+                        <div class="form-group">
+                            <label>Priority</label>
+                            <div class="priority-select-wrapper">
+                                <button type="button" class="priority-btn" data-priority="1" onclick="setPriority(1)">Min</button>
+                                <button type="button" class="priority-btn" data-priority="2" onclick="setPriority(2)">Low</button>
+                                <button type="button" class="priority-btn active" data-priority="3" onclick="setPriority(3)">Default</button>
+                                <button type="button" class="priority-btn" data-priority="4" onclick="setPriority(4)">High</button>
+                                <button type="button" class="priority-btn" data-priority="5" onclick="setPriority(5)">Max</button>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="form-row" style="margin-bottom: 1rem;">
+                        <div class="form-group">
+                            <label for="pub-tags">Tags</label>
+                            <input type="text" class="form-control" id="pub-tags" placeholder="e.g. warning, tag1, tag2">
+                        </div>
+                        <div class="form-group">
+                            <label for="pub-click">Click URL</label>
+                            <input type="url" class="form-control" id="pub-click" placeholder="https://example.com">
+                        </div>
+                    </div>
+                    
+                    {auth_field_html}
+                    
+                    <div id="pub-status" class="publish-status" style="margin-bottom: 1rem;"></div>
+                    
+                    <button type="submit" class="btn-publish-submit" id="pub-submit-btn">
+                        <span>Send</span>
+                    </button>
+                </form>
             </div>
         </div>
         

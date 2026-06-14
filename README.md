@@ -37,7 +37,11 @@ curl -s "https://ntfy.gluek.info/mytopic/json?since=10m"
 
 ### Sending notifications
 
-Use `curl` or any `ntfy` client and point it to your bot's web server URL.
+1. **Web Interface (Browser)**:
+   Navigate to the topic page directly (e.g., `https://ntfy.gluek.info/mytopic`) and expand the **✏️ Send Notification** section. Fill in the message, priority, tags, click URL, and optional server auth token (saved in browser `localStorage`), and click **Send**.
+
+2. **HTTP Request (`curl`)**:
+   Use `curl` or any `ntfy` client and point it to your bot's web server URL.
 
 ```bash
 # Basic message
