@@ -1701,8 +1701,13 @@ def on_msg_failed(bot, accid, event):
         except Exception:
             return
 
-        # Fetch chat details to include in logs
-        chat_id = msg_snapshot.get('chat_id') if isinstance(msg_snapshot, dict) else getattr(msg_snapshot, 'chat_id', None)
+        # Fetch chat details to include in logs (checking both snake_case and camelCase key fallbacks)
+        chat_id = None
+        if isinstance(msg_snapshot, dict):
+            chat_id = msg_snapshot.get('chat_id') or msg_snapshot.get('chatId')
+        else:
+            chat_id = getattr(msg_snapshot, 'chat_id', getattr(msg_snapshot, 'chatId', None))
+            
         chat_name = "Unknown"
 
         if chat_id:
@@ -1720,7 +1725,7 @@ def on_msg_failed(bot, accid, event):
         if msg_error:
             msg_error_lower = msg_error.lower()
             if "encryption" in msg_error_lower or "unencrypted" in msg_error_lower or "шифр" in msg_error_lower or "зашифр" in msg_error_lower:
-                bot.logger.error(
+                bot.logger.warning(
                     f"Permanent E2E encryption failure for message {msg_id} in chat '{chat_name}' (ID: {chat_id}): {msg_error}. "
                     f"Stopping failover attempts immediately."
                 )
@@ -1794,15 +1799,18 @@ def on_msg_failed(bot, accid, event):
                     delivered = False
                     while time.time() - start_time < 10:
                         try:
-                            msg_snapshot = bot.rpc.get_message(accid, msg_id)
-                            state = msg_snapshot.get('state') if isinstance(msg_snapshot, dict) else getattr(msg_snapshot, 'state', None)
-                            if state in (26, 28):
-                                bot.logger.info(f"Resilient Failover bg: msg {msg_id} delivered successfully on {next_addr}.")
-                                delivered = True
-                                break
-                            if state == 24:
-                                bot.logger.warning(f"Resilient Failover bg: msg {msg_id} failed on {next_addr}.")
-                                break
+                            raw_msg = bot.rpc.get_message(accid, msg_id)
+                            if raw_msg:
+                                from deltachat2 import AttrDict
+                                msg_snapshot = AttrDict(raw_msg)
+                                state = msg_snapshot.get('state') if isinstance(msg_snapshot, dict) else getattr(msg_snapshot, 'state', None)
+                                if state in (26, 28):
+                                    bot.logger.info(f"Resilient Failover bg: msg {msg_id} delivered successfully on {next_addr}.")
+                                    delivered = True
+                                    break
+                                if state == 24:
+                                    bot.logger.warning(f"Resilient Failover bg: msg {msg_id} failed on {next_addr}.")
+                                    break
                         except Exception as poll_err:
                             bot.logger.debug(f"Resilient Failover bg poll error: {poll_err}")
                         time.sleep(0.5)
@@ -1811,10 +1819,10 @@ def on_msg_failed(bot, accid, event):
                         bot.logger.warning(f"Resilient Failover bg: msg {msg_id} did not deliver on {next_addr} within timeout.")
 
             except Exception as resend_err:
-                bot.logger.error(f"Error executing scheduled resend for message {msg_id} in chat '{chat_name}' (ID: {chat_id}): {resend_err}")
+                bot.logger.warning(f"Error executing scheduled resend for message {msg_id} in chat '{chat_name}' (ID: {chat_id}): {resend_err}")
                 err_str = str(resend_err).lower()
                 if "e2e encryption" in err_str or "encryption" in err_str:
-                    bot.logger.error(f"E2E encryption error detected during resend of msg {msg_id} in chat '{chat_name}'. Stopping further failovers.")
+                    bot.logger.warning(f"E2E encryption error detected during resend of msg {msg_id} in chat '{chat_name}'. Stopping further failovers.")
                     try:
                         _message_failover_attempts[msg_id]['count'] = 10
                     except Exception:
@@ -1836,9 +1844,10 @@ def on_msg_failed(bot, accid, event):
             if admin_email:
                 try:
                     contact_id = bot.rpc.create_contact(accid, admin_email, "Admin")
-                    chat_id = bot.rpc.create_chat_by_contact_id(accid, contact_id)
-                    if chat_id:
-                        _dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text=f"⚠️ **Transport Failover Alert**\n\nMessage delivery failed on `{current_addr}`.\nScheduled temporary resend on `{next_addr}`."))
+                    admin_chat_id = bot.rpc.create_chat_by_contact_id(accid, contact_id)
+                    # Protect against infinite admin alert loops if the admin alert itself fails to send
+                    if admin_chat_id and chat_id != admin_chat_id:
+                        _dc_send_msg_with_stats(bot, accid, admin_chat_id, MsgData(text=f"⚠️ **Transport Failover Alert**\n\nMessage delivery failed on `{current_addr}`.\nScheduled temporary resend on `{next_addr}`."))
                 except Exception as admin_err:
                     bot.logger.error(f"Failed to send failover alert to admin: {admin_err}")
 
