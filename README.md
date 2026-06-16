@@ -63,7 +63,7 @@ The bot supports the following `ntfy` Priority values:
 
 ### Advanced Features
 
-- **Automatic Transport Failover**: Supports multiple mail servers. The bot automatically detects message delivery failures via raw core events, switches `configured_addr` to a backup transport in round-robin fashion, resends the message, and remains on the working transport.
+- **Automatic Transport Failover**: Supports multiple mail servers. The bot automatically detects message delivery failures via raw core events, switches `configured_addr` to a backup transport in round-robin fashion, and schedules a resend of the message using exponential backoff (5s, 10s, 20s, 40s...) via an asynchronous timer thread (up to a maximum of 10 attempts per message) to prevent loop propagation and CPU spikes.
 - **Header Aliases**: Use `t`/`ti` for Title, `p`/`prio` for Priority, `ta`/`tag` for Tags.
 - **Tags & Emojis 🥳**: Add emojis to your messages using the `Tags` header (e.g., `Tags: warning,skull`). Non-emoji tags are appended to the message text.
 - **Click Actions 🔗**: Use the `Click` header to add a clickable link to your notification.
