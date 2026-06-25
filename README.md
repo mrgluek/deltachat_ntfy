@@ -22,6 +22,12 @@ Start the bot. Add it to Delta Chat. Message the bot:
 - `/resilient` to toggle resilient sending mode across all relays (admin only)
 - `/help` to see all available commands
 
+### Target-Specific Commands in Group Chats
+
+In group chats where multiple bots are present, you can address this bot specifically to prevent other bots from responding. Append the `@ntfy` suffix to any command, for example:
+- `/help@ntfy`
+- `/stats@ntfy`
+
 ### API Subscription (JSON Stream)
 
 The bot supports the `ntfy` JSON stream API for programmatic subscriptions. You can use this to integrate with automated agents or scripts.

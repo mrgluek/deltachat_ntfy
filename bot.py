@@ -1882,10 +1882,60 @@ def on_init(bot, args):
     web_thread = threading.Thread(target=start_web_server_thread, daemon=True)
     web_thread.start()
 
+def setup_custom_command_parser(bot, allowed_prefixes):
+    original_parse_command = bot._parse_command
+
+    def custom_parse_command(accid: int, event) -> None:
+        text = event.msg.text
+        if not text:
+            original_parse_command(accid, event)
+            return
+
+        parts = text.split(maxsplit=1)
+        cmd = parts[0]
+        
+        if "@" in cmd:
+            cmd_name, suffix = cmd.split("@", 1)
+            suffix_lower = suffix.lower()
+            
+            try:
+                self_address = bot.rpc.get_contact(accid, 1).address.lower()
+            except Exception:
+                self_address = ""
+            
+            matched = False
+            for p in allowed_prefixes:
+                if suffix_lower.startswith(p.lower()):
+                    matched = True
+                    break
+            if not matched and self_address and suffix_lower == self_address:
+                matched = True
+            
+            if matched:
+                new_text = cmd_name
+                if len(parts) > 1:
+                    new_text += " " + parts[1]
+                
+                original_text = event.msg.text
+                event.msg["text"] = new_text
+                try:
+                    original_parse_command(accid, event)
+                finally:
+                    event.msg["text"] = original_text
+            else:
+                event.command = ""
+                event.payload = ""
+        else:
+            original_parse_command(accid, event)
+
+    bot._parse_command = custom_parse_command
+
+
 @dc_cli.on_start
 def on_start(bot, _args):
     """Called after the bot is fully started. Print QR code for easy setup."""
     global dc_bot_instance, dc_accid
+    setup_custom_command_parser(bot, ["ntfy"])
     dc_bot_instance = bot
     accounts = bot.rpc.get_all_account_ids()
     if accounts:
