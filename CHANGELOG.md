@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2026-06-25]
 
+### Changed
+- **Bidirectional Suffix Matching:** Suffix matching is now bidirectional (e.g. `@ntfy` will match NTFY bot, even with partial entries).
+- **Smart Group Chat Command Filtering:** The bot now automatically ignores unaddressed general `/help` and `/stats` commands in group chats if other bots are present in the chat.
+
 ### Added
 - **Target-Specific Command Suffixes:** Added support for addressing this bot specifically in group chats using the `/command@ntfy` suffix.
 
