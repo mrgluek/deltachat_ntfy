@@ -11,11 +11,31 @@ os.environ["DB_PATH"] = TEST_DB
 try:
     import deltachat2
 except ImportError:
-    sys.modules['deltachat2'] = MagicMock()
+    mock_deltachat2 = MagicMock()
+    class MsgData:
+        def __init__(self, text="", file="", override_sender_name=None):
+            self.text = text
+            self.file = file
+            self.override_sender_name = override_sender_name
+    mock_deltachat2.MsgData = MsgData
+    sys.modules['deltachat2'] = mock_deltachat2
 try:
     import deltabot_cli
 except ImportError:
-    sys.modules['deltabot_cli'] = MagicMock()
+    class MockBotCli:
+        def __init__(self, *args, **kwargs):
+            pass
+        def on(self, *args, **kwargs):
+            return lambda func: func
+        def on_init(self, func):
+            return func
+        def on_start(self, func):
+            return func
+        def start(self):
+            pass
+    mock_deltabot_cli = MagicMock()
+    mock_deltabot_cli.BotCli = MockBotCli
+    sys.modules['deltabot_cli'] = mock_deltabot_cli
 try:
     import emoji
 except ImportError:

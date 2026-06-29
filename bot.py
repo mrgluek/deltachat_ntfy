@@ -2439,11 +2439,7 @@ def accounts_command(bot, accid, event):
 @dc_cli.on(events.NewMessage(command="/rmaccount"))
 def rmaccount_command(bot, accid, event):
     msg = event.msg
-    contact = bot.rpc.get_contact(accid, msg.from_id)
-    sender_email = contact.address
-    
-    admin_email = database.get_config("admin_dc_email")
-    if not admin_email or admin_email.lower() != sender_email.lower():
+    if not _is_dc_admin(bot, accid, msg.from_id):
         bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="❌ This command is only for the administrator."))
         return
         
@@ -2612,17 +2608,14 @@ def stats_command(bot, accid, event):
 @dc_cli.on(events.NewMessage(command="/url"))
 def url_command(bot, accid, event):
     msg = event.msg
-    contact = bot.rpc.get_contact(accid, msg.from_id)
-    sender_email = contact.address
-    
-    admin_email = database.get_config("admin_dc_email")
-    if not admin_email or admin_email.lower() != sender_email.lower():
+    if not _is_dc_admin(bot, accid, msg.from_id):
         bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="❌ This command is only for the administrator."))
         return
         
     url = event.payload.strip()
     if not url:
-        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="❌ Usage: /url <https://your-bot-url.com>"))
+        current_url = database.get_config("bot_url") or "Not configured"
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"ℹ️ Current Bot URL: {current_url}"))
         return
     
     database.set_config("bot_url", url)

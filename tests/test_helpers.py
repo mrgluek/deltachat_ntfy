@@ -1,7 +1,7 @@
 import os
 import sys
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch, ANY
 
 # Set DB_PATH to a temporary test file
 TEST_DB = "test_ntfy.db"
@@ -11,11 +11,31 @@ os.environ["DB_PATH"] = TEST_DB
 try:
     import deltachat2
 except ImportError:
-    sys.modules['deltachat2'] = MagicMock()
+    mock_deltachat2 = MagicMock()
+    class MsgData:
+        def __init__(self, text="", file="", override_sender_name=None):
+            self.text = text
+            self.file = file
+            self.override_sender_name = override_sender_name
+    mock_deltachat2.MsgData = MsgData
+    sys.modules['deltachat2'] = mock_deltachat2
 try:
     import deltabot_cli
 except ImportError:
-    sys.modules['deltabot_cli'] = MagicMock()
+    class MockBotCli:
+        def __init__(self, *args, **kwargs):
+            pass
+        def on(self, *args, **kwargs):
+            return lambda func: func
+        def on_init(self, func):
+            return func
+        def on_start(self, func):
+            return func
+        def start(self):
+            pass
+    mock_deltabot_cli = MagicMock()
+    mock_deltabot_cli.BotCli = MockBotCli
+    sys.modules['deltabot_cli'] = mock_deltabot_cli
 try:
     import emoji
 except ImportError:
@@ -97,3 +117,49 @@ class TestHelpers(unittest.TestCase):
         emojis, text_tags = bot.parse_tags("warning,custom_tag,skull")
         self.assertIn("custom_tag", text_tags)
         self.assertIn("⚠️", emojis)
+
+    @patch('bot._is_dc_admin')
+    @patch('bot._dc_send_msg_with_stats')
+    def test_url_command_admin(self, mock_send_with_stats, mock_is_admin):
+        # 1. Test non-admin access
+        mock_is_admin.return_value = False
+        mock_bot = MagicMock()
+        mock_event = MagicMock()
+        mock_event.msg.from_id = 456
+        mock_event.msg.chat_id = 789
+        
+        bot.url_command(mock_bot, 1, mock_event)
+        
+        # Verify it rejects with administrator error message
+        mock_bot.rpc.send_msg.assert_called_once_with(
+            1, 789, ANY
+        )
+        msg_data = mock_bot.rpc.send_msg.call_args[0][2]
+        self.assertIn("only for the administrator", msg_data.text)
+        
+        # 2. Test admin access, payload is empty (query current URL)
+        mock_bot.reset_mock()
+        mock_is_admin.return_value = True
+        mock_event.payload = ""
+        
+        # Set config in DB
+        database.set_config("bot_url", "https://my-test-url.com")
+        bot.url_command(mock_bot, 1, mock_event)
+        
+        # Verify it sends current url with stats
+        mock_send_with_stats.assert_called_once()
+        sent_msg = mock_send_with_stats.call_args[0][3]
+        self.assertIn("Current Bot URL: https://my-test-url.com", sent_msg.text)
+        
+        # 3. Test admin access, payload has new URL
+        mock_send_with_stats.reset_mock()
+        mock_event.payload = "https://new-url.com"
+        
+        bot.url_command(mock_bot, 1, mock_event)
+        
+        # Verify database config updated
+        self.assertEqual(database.get_config("bot_url"), "https://new-url.com")
+        # Verify it sends success message with stats
+        mock_send_with_stats.assert_called_once()
+        sent_msg = mock_send_with_stats.call_args[0][3]
+        self.assertIn("Bot URL updated to: https://new-url.com", sent_msg.text)

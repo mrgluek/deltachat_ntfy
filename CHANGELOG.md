@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Added in-memory HTML caching for the bot's home page, avoiding redundant CPU/IO operations (like database config lookups, account status checks, and QR code generation) on every visit.
   - Configured long-term `Cache-Control` headers (`public, max-age=31536000, immutable`) for static assets (icons, favicons, web app manifest) to allow browser-side caching.
 
+### Fixed
+- **Admin Verification & /url Command Improvement**:
+  - Migrated `/url` and `/rmaccount` admin checks to use the unified, fingerprint-supported `_is_dc_admin` helper.
+  - Added support for running `/url` without arguments to query and display the current configured bot URL.
+
 ## [2026-06-25]
 
 ### Changed
