@@ -33,6 +33,12 @@ logger = logging.getLogger("ntfy_bot")
 
 dc_cli = BotCli("ntfybot")
 bot_qr_cache = {} # Cache for secure join links to keep them stable on refresh
+index_page_html_cache = None
+
+def clear_index_cache():
+    global index_page_html_cache
+    index_page_html_cache = None
+
 
 # Global references
 dc_bot_instance = None
@@ -383,6 +389,10 @@ async def handle_ntfy_post(request):
     return web.json_response({"id": "ntfy-compat", "time": int(time.time()), "event": "message", "topic": topic, "message": message})
 
 async def handle_index(request):
+    global index_page_html_cache
+    if index_page_html_cache is not None:
+        return web.Response(text=index_page_html_cache, content_type="text/html")
+
     bot_url = database.get_config("bot_url") or "https://ntfy.gluek.info"
     html = """<!DOCTYPE html>
 <html>
@@ -525,6 +535,7 @@ async def handle_index(request):
     </div>
 </body>
 </html>"""
+    index_page_html_cache = html
     return web.Response(text=html, content_type="text/html")
 
 async def handle_topic_view(request):
@@ -1330,7 +1341,10 @@ async def handle_static(request):
         'web-app-manifest-192x192.png', 'web-app-manifest-512x512.png'
     ]
     if filename in allowed_files and os.path.exists(filename):
-        return web.FileResponse(filename)
+        headers = {
+            'Cache-Control': 'public, max-age=31536000, immutable'
+        }
+        return web.FileResponse(filename, headers=headers)
     return web.Response(status=404)
 
 async def handle_ntfy_json(request):
@@ -2449,6 +2463,7 @@ def rmaccount_command(bot, accid, event):
             bot.rpc.remove_account(target_aid)
         else:
             bot.rpc.delete_account(target_aid)
+        clear_index_cache()
         bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"✅ Account {target_aid} has been successfully deleted."))
     except Exception as e:
         bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"❌ Failed to delete account {target_aid}: {e}"))
@@ -2611,6 +2626,7 @@ def url_command(bot, accid, event):
         return
     
     database.set_config("bot_url", url)
+    clear_index_cache()
     _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"✅ Bot URL updated to: {url}"))
 
 @dc_cli.on(events.NewMessage(command="/transports"))
