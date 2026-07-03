@@ -2,6 +2,7 @@ services:
   ntfy_bot:
     container_name: deltachat_ntfy_bot
     build: .
+    init: true
     restart: always
     logging:
       driver: json-file
