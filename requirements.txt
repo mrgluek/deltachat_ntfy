@@ -1,4 +1,5 @@
 deltabot-cli @ git+https://github.com/deltachat-bot/deltabot-cli-py.git
+deltachat2[full]<1.0.0
 aiohttp
 qrcode
 emoji
