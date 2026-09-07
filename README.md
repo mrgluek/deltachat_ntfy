@@ -140,6 +140,16 @@ docker compose run --rm ntfy_bot python bot.py init transport backup@example.com
 
 You can also manage transports directly in Delta Chat using `/addtransport` and `/transports`.
 
+### Environment Variables
+
+| Variable | Description | Default |
+| --- | --- | --- |
+| `AUTH_TOKEN` | Optional bearer token / query param token for securing the HTTP notification endpoint. | *(empty)* |
+| `DISPLAY_NAME` | Custom display name for the Delta Chat bot profile. | `Ntfy Bot` |
+| `STATUS_TEXT` | Custom bio/status description for the Delta Chat bot profile. | `A Delta Chat bot that emulates a ntfy.sh backend...` |
+| `PORT` | Web server port for HTTP API and web dashboard. | `8080` |
+| `DB_PATH` | Path to SQLite database file. | `ntfy.db` |
+
 ## Running the Bot
 
 ### Using Docker (Recommended)

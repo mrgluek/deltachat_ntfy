@@ -30,7 +30,7 @@ import collections
 # Initialize logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("ntfy_bot")
-VERSION = "1.1.0"
+VERSION = "1.1.1"
 dc_cli = BotCli("ntfybot")
 bot_qr_cache = {} # Cache for secure join links to keep them stable on refresh
 index_page_html_cache = None
@@ -1869,8 +1869,29 @@ def on_init(bot, args):
     
     for accid in bot.rpc.get_all_account_ids():
         dc_accid = accid
-        bot.rpc.set_config(accid, "displayname", "Ntfy Bot")
-        bot.rpc.set_config(accid, "selfstatus", "A Delta Chat bot that emulates a ntfy.sh backend to broadcast notifications from HTTP POST requests to Delta Chat users and groups: https://github.com/mrgluek/deltachat_ntfy")
+        bot_name = os.environ.get("DISPLAY_NAME")
+        if not bot_name and os.path.exists("/data/options.json"):
+            try:
+                with open("/data/options.json", "r", encoding="utf-8") as f:
+                    opts = json.load(f)
+                    bot_name = opts.get("display_name", "").strip()
+            except Exception:
+                pass
+        if not bot_name:
+            bot_name = "Ntfy Bot"
+        bot.rpc.set_config(accid, "displayname", bot_name)
+
+        status_text = os.environ.get("STATUS_TEXT")
+        if not status_text and os.path.exists("/data/options.json"):
+            try:
+                with open("/data/options.json", "r", encoding="utf-8") as f:
+                    opts = json.load(f)
+                    status_text = opts.get("status_text", "").strip()
+            except Exception:
+                pass
+        if not status_text:
+            status_text = "A Delta Chat bot that emulates a ntfy.sh backend to broadcast notifications from HTTP POST requests to Delta Chat users and groups: https://github.com/mrgluek/deltachat_ntfy"
+        bot.rpc.set_config(accid, "selfstatus", status_text)
         # Auto-delete messages after 24 hours to save disk space
         bot.rpc.set_config(accid, "delete_device_after", "86400")
         try:
