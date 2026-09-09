@@ -176,3 +176,11 @@ To use it:
 1. Edit `Caddyfile` with your domain name.
 2. Uncomment the `caddy` service in `docker-compose.yml`.
 3. Run `docker compose up -d`.
+
+## Running Tests
+
+Run the unit test suite:
+
+```bash
+python3 -m unittest discover -s tests -v
+```

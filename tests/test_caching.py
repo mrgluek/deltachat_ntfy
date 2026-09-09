@@ -41,6 +41,23 @@ try:
 except ImportError:
     sys.modules['emoji'] = MagicMock()
 
+try:
+    import aiohttp
+    from aiohttp import web
+except ImportError:
+    aiohttp = MagicMock()
+    web = MagicMock()
+    class MockResponse:
+        def __init__(self, text="", status=200, content_type="", **kwargs):
+            self.text = text
+            self.status = status
+            self.content_type = content_type
+    web.Response = MockResponse
+    web.FileResponse = MagicMock()
+    aiohttp.web = web
+    sys.modules['aiohttp'] = aiohttp
+    sys.modules['aiohttp.web'] = web
+
 # Import the actual modules to be tested
 import database
 import bot
