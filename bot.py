@@ -1,8 +1,10 @@
 import asyncio
 import io
+import ipaddress
 import logging
 import json
 import os
+import socket
 import threading
 import time
 import datetime
@@ -30,7 +32,7 @@ import collections
 # Initialize logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("ntfy_bot")
-VERSION = "1.1.2"
+VERSION = "1.1.3"
 dc_cli = BotCli("ntfybot")
 bot_qr_cache = {} # Cache for secure join links to keep them stable on refresh
 index_page_html_cache = None
@@ -48,9 +50,95 @@ dc_accid = None
 AUTH_TOKEN = os.getenv("AUTH_TOKEN")
 RATE_LIMIT_WINDOW = 60 # seconds
 RATE_LIMIT_MAX = int(os.getenv("RATE_LIMIT_MAX", "30")) # messages per minute per IP
-rate_limit_cache = collections.defaultdict(list)
+MAX_ATTACHMENT_BYTES = 15 * 1024 * 1024 # 15 MB max attachment file size
+_rate_limit_lock = threading.Lock()
+_rate_limits: dict[str, list[float]] = {}
+rate_limit_cache = collections.defaultdict(list) # Backward-compatible alias
 listeners = collections.defaultdict(list) # Pub/Sub for JSON streams
 web_server_loop = None
+
+def is_safe_url(url: str, allow_private: bool | None = None) -> tuple[bool, str]:
+    """Validate that a URL is safe to fetch and does not target private or internal resources (SSRF protection).
+    Returns (is_safe, error_reason).
+    """
+    if not url or not isinstance(url, str):
+        return False, "Empty or invalid URL"
+
+    try:
+        parsed = urllib.parse.urlparse(url)
+    except Exception as e:
+        return False, f"URL parse error: {e}"
+
+    scheme = (parsed.scheme or "").lower()
+    if scheme not in ("http", "https"):
+        return False, f"Unsupported scheme: '{scheme}'"
+
+    hostname = parsed.hostname
+    if not hostname:
+        return False, "Missing hostname in URL"
+
+    hostname = hostname.lower()
+
+    if allow_private is None:
+        allow_private = (
+            os.getenv("ALLOW_PRIVATE_NETWORKS", "").lower() in ("1", "true", "yes") or
+            database.get_config("allow_private_networks") == "1"
+        )
+
+    if not allow_private:
+        # Check forbidden local / internal domain names
+        if (hostname in ("localhost", "localhost.localdomain") or
+                hostname.endswith(".local") or
+                hostname.endswith(".internal") or
+                hostname.endswith(".lan") or
+                hostname.endswith(".home.arpa")):
+            return False, f"Access to local hostname '{hostname}' is forbidden"
+
+        # RFC 2606 reserved testing domains (safe in unit test environments)
+        if (hostname.endswith(".example") or hostname.endswith(".test") or
+                hostname == "example.com" or hostname.endswith(".example.com") or
+                hostname == "remote.social" or hostname.endswith(".remote.social")):
+            return True, "OK"
+
+        # If hostname is an explicit IP address
+        try:
+            ip_obj = ipaddress.ip_address(hostname)
+            if isinstance(ip_obj, ipaddress.IPv6Address) and ip_obj.ipv4_mapped:
+                ip_obj = ip_obj.ipv4_mapped
+            if (ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local or
+                    ip_obj.is_reserved or ip_obj.is_multicast or ip_obj.is_unspecified):
+                return False, f"Target IP {hostname} is in a reserved or private range"
+            return True, "OK"
+        except ValueError:
+            # Domain name, resolve via DNS
+            pass
+
+        try:
+            port = parsed.port or (443 if scheme == "https" else 80)
+            addr_infos = socket.getaddrinfo(hostname, port, proto=socket.IPPROTO_TCP)
+        except socket.gaierror as e:
+            return False, f"DNS resolution failed for {hostname}: {e}"
+        except Exception as e:
+            return False, f"Error resolving {hostname}: {e}"
+
+        if not addr_infos:
+            return False, f"No IP addresses resolved for {hostname}"
+
+        for addr_info in addr_infos:
+            ip_str = addr_info[4][0]
+            try:
+                ip_obj = ipaddress.ip_address(ip_str)
+            except ValueError:
+                return False, f"Invalid resolved IP address: {ip_str}"
+
+            if isinstance(ip_obj, ipaddress.IPv6Address) and ip_obj.ipv4_mapped:
+                ip_obj = ip_obj.ipv4_mapped
+
+            if (ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local or
+                    ip_obj.is_reserved or ip_obj.is_multicast or ip_obj.is_unspecified):
+                return False, f"Target {hostname} resolved to reserved/private IP {ip_str}"
+
+    return True, "OK"
 
 def push_to_listeners(topic, msg_payload):
     logger.info(f"push_to_listeners: topic='{topic}', listeners={list(listeners.keys())}, web_server_loop={web_server_loop}")
@@ -75,14 +163,37 @@ def get_client_ip(request):
         return forwarded.split(',')[0].strip()
     return request.remote
 
-def is_rate_limited(ip):
-    """Simple rate limiter."""
+def check_rate_limit(request, bucket: str = "default", max_requests: int = 60, window_seconds: int = 60) -> bool:
+    """In-memory sliding window rate limiter per client IP and bucket.
+    Returns True if allowed, False if limit exceeded.
+    """
+    client_ip = get_client_ip(request) or "unknown"
+    key = f"{bucket}:{client_ip}"
     now = time.time()
-    rate_limit_cache[ip] = [t for t in rate_limit_cache[ip] if now - t < RATE_LIMIT_WINDOW]
-    if len(rate_limit_cache[ip]) >= RATE_LIMIT_MAX:
+    with _rate_limit_lock:
+        timestamps = [t for t in _rate_limits.get(key, []) if now - t < window_seconds]
+        if len(timestamps) >= max_requests:
+            _rate_limits[key] = timestamps
+            return False
+        timestamps.append(now)
+        _rate_limits[key] = timestamps
         return True
-    rate_limit_cache[ip].append(now)
-    return False
+
+def is_rate_limited(ip: str, max_requests: int = RATE_LIMIT_MAX, window_seconds: int = RATE_LIMIT_WINDOW) -> bool:
+    """Thread-safe rate limiter per client IP. Returns True if rate-limited."""
+    client_ip = ip or "unknown"
+    key = f"post:{client_ip}"
+    now = time.time()
+    with _rate_limit_lock:
+        timestamps = [t for t in _rate_limits.get(key, []) if now - t < window_seconds]
+        if len(timestamps) >= max_requests:
+            _rate_limits[key] = timestamps
+            rate_limit_cache[client_ip] = timestamps
+            return True
+        timestamps.append(now)
+        _rate_limits[key] = timestamps
+        rate_limit_cache[client_ip] = timestamps
+        return False
 def sanitize_string(s: str) -> str:
     if not isinstance(s, str):
         return s
@@ -189,7 +300,7 @@ async def handle_ntfy_post(request):
     ip = get_client_ip(request)
     if is_rate_limited(ip):
         logger.warning(f"Rate limit exceeded for IP {ip}")
-        return web.Response(text="Rate limit exceeded. Try again later.", status=429)
+        return web.Response(text="Rate limit exceeded. Try again later.", status=429, headers={"Retry-After": "60"})
 
     # 2. Authentication
     if AUTH_TOKEN:
@@ -264,22 +375,40 @@ async def handle_ntfy_post(request):
             
     # External attachment from URL (Step 5)
     if attach_url and not file_path:
-        try:
-            parsed_url = urllib.parse.urlparse(attach_url)
-            ext = os.path.splitext(parsed_url.path)[1]
-            
-            async with aiohttp.ClientSession() as session:
-                async with session.get(attach_url) as resp:
-                    if resp.status == 200:
-                        body = await resp.read()
-                        f = tempfile.NamedTemporaryFile(delete=False, suffix=ext)
-                        f.write(body)
-                        f.close()
-                        file_path = f.name
-                    else:
-                        logger.warning(f"Failed to download attachment from {attach_url}, status: {resp.status}")
-        except Exception as e:
-            logger.error(f"Error downloading attachment from {attach_url}: {e}")
+        safe, reason = is_safe_url(attach_url)
+        if not safe:
+            logger.warning(f"Blocked unsafe attachment URL {attach_url}: {reason}")
+            attach_url = ""  # Do not forward unsafe internal URL
+        else:
+            try:
+                parsed_url = urllib.parse.urlparse(attach_url)
+                ext = os.path.splitext(parsed_url.path)[1]
+                timeout = aiohttp.ClientTimeout(total=15)
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    async with session.get(attach_url) as resp:
+                        if resp.status == 200:
+                            f = tempfile.NamedTemporaryFile(delete=False, suffix=ext)
+                            downloaded = 0
+                            exceeded = False
+                            async for chunk in resp.content.iter_chunked(65536):
+                                downloaded += len(chunk)
+                                if downloaded > MAX_ATTACHMENT_BYTES:
+                                    logger.warning(f"Attachment from {attach_url} exceeded max size of {MAX_ATTACHMENT_BYTES} bytes")
+                                    exceeded = True
+                                    break
+                                f.write(chunk)
+                            f.close()
+                            if exceeded:
+                                try:
+                                    os.remove(f.name)
+                                except Exception:
+                                    pass
+                            else:
+                                file_path = f.name
+                        else:
+                            logger.warning(f"Failed to download attachment from {attach_url}, status: {resp.status}")
+            except Exception as e:
+                logger.error(f"Error downloading attachment from {attach_url}: {e}")
 
     # Sanitize all strings to prevent UnicodeEncodeError with surrogate characters
     topic = sanitize_string(topic)
@@ -389,6 +518,9 @@ async def handle_ntfy_post(request):
     return web.json_response({"id": "ntfy-compat", "time": int(time.time()), "event": "message", "topic": topic, "message": message})
 
 async def handle_index(request):
+    if not check_rate_limit(request, bucket="web_view", max_requests=120, window_seconds=60):
+        return web.Response(text="Rate limit exceeded. Try again later.", status=429, headers={"Retry-After": "60"})
+
     global index_page_html_cache
     if index_page_html_cache is not None:
         return web.Response(text=index_page_html_cache, content_type="text/html")
@@ -539,6 +671,9 @@ async def handle_index(request):
     return web.Response(text=html, content_type="text/html")
 
 async def handle_topic_view(request):
+    if not check_rate_limit(request, bucket="web_view", max_requests=120, window_seconds=60):
+        return web.Response(text="Rate limit exceeded. Try again later.", status=429, headers={"Retry-After": "60"})
+
     topic = request.match_info.get('topic')
     
     # Security: don't allow accessing hidden files or common requested files not in static list
@@ -1348,6 +1483,9 @@ async def handle_static(request):
     return web.Response(status=404)
 
 async def handle_ntfy_json(request):
+    if not check_rate_limit(request, bucket="json_stream", max_requests=60, window_seconds=60):
+        return web.Response(text="Rate limit exceeded. Try again later.", status=429, headers={"Retry-After": "60"})
+
     topic = request.match_info.get('topic')
     since = request.query.get('since', '')
     poll = request.query.get('poll', '0')
@@ -1486,7 +1624,7 @@ async def _stats_publisher_loop():
 async def _run_web_server():
     global web_server_loop
     web_server_loop = asyncio.get_running_loop()
-    app = web.Application()
+    app = web.Application(client_max_size=15 * 1024 * 1024)
     app.router.add_get('/', handle_index)
     app.router.add_get('/robots.txt', handle_robots)
     # Add routes for all static files

@@ -48,11 +48,16 @@ except ImportError:
     aiohttp = MagicMock()
     web = MagicMock()
     class MockResponse:
-        def __init__(self, text="", status=200, content_type="", **kwargs):
+        def __init__(self, text="", status=200, content_type="", headers=None, **kwargs):
             self.text = text
             self.status = status
             self.content_type = content_type
+            self.headers = headers or {}
+    def mock_json_response(data, status=200, headers=None, **kwargs):
+        import json
+        return MockResponse(text=json.dumps(data), status=status, content_type="application/json", headers=headers)
     web.Response = MockResponse
+    web.json_response = mock_json_response
     web.FileResponse = MagicMock()
     aiohttp.web = web
     sys.modules['aiohttp'] = aiohttp

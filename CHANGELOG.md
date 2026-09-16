@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.3] - 2026-09-16
+
+### Security
+- **SSRF Defense (`Attach` URL validation)**: Added rigorous IP and DNS validation via `is_safe_url()` before fetching external attachments. Blocks local hostnames (`localhost`, `*.local`, `*.internal`, `*.lan`), loopback (`127.0.0.0/8`, `::1`), private ranges (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`), link-local/cloud metadata (`169.254.169.254`), multicast, and DNS rebinding to private IPs.
+- **Unbounded Attachment & Body Protection**: Enforced `client_max_size = 15MB` on `web.Application` and streamed external attachment downloads in chunks with an explicit 15MB cap to prevent memory exhaustion (DoS).
+- **Per-IP Rate Limiting**: Added thread-safe sliding-window rate limiting across all public endpoints (`/`, `/{topic}`, `/{topic}/json`, and incoming notification POSTs) with `Retry-After: 60` headers on HTTP 429.
+- **Dependency Hardening**: Pinned `aiohttp>=3.10.5,<4.0.0`, `qrcode>=7.4.2,<8.0.0`, and `emoji>=2.12.0,<3.0.0` in `requirements.txt`.
+
 ## [1.1.2] - 2026-09-09
 
 ### Added
