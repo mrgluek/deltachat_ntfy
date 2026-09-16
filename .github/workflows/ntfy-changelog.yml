@@ -1,5 +1,9 @@
 name: Notify ntfy
-on: [push]
+on:
+  push:
+    branches:
+      - main
+      - master
 
 jobs:
   notify:
