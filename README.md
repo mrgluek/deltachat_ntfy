@@ -28,6 +28,8 @@ In group chats where multiple bots are present, you can address this bot specifi
 - `/help@ntfy`
 - `/stats@ntfy`
 
+A plain `/help` sent in a group chat is answered in a private 1:1 chat with the sender, so several bots don't flood the group with help texts. Use `/help@ntfy` to show the help in the group itself.
+
 ### API Subscription (JSON Stream)
 
 The bot supports the `ntfy` JSON stream API for programmatic subscriptions. You can use this to integrate with automated agents or scripts.
