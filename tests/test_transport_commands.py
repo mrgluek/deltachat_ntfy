@@ -1,7 +1,7 @@
 """
 Tests for transport and admin commands in deltachat_ntfy.
 Verifies private chat enforcement on /addtransport and /initadmin,
-resilient mode commands, and error sanitization.
+deprecated relay commands, and error sanitization.
 """
 import os
 import unittest
@@ -176,17 +176,17 @@ class TestTransportCommands(unittest.TestCase):
 
     @patch("bot._dc_send_msg_with_stats")
     @patch("bot._is_dc_admin")
-    def test_resilient_command(self, mock_is_admin, mock_send):
+    def test_deprecated_relay_commands(self, mock_is_admin, mock_send):
         mock_is_admin.return_value = True
-
-        self.mock_event.payload = "on"
-        bot.resilient_command(self.mock_bot, self.accid, self.mock_event)
-        self.assertEqual(database.get_config("resilient"), "1")
-
-        self.mock_event.payload = "off"
-        bot.resilient_command(self.mock_bot, self.accid, self.mock_event)
-        self.assertEqual(database.get_config("resilient"), "0")
-
+        for handler, cmd in ((bot.resilient_command, "/resilient"), (bot.setprimary_command, "/setprimary")):
+            mock_send.reset_mock()
+            self.mock_event.payload = "on" if cmd == "/resilient" else "relay@example.org"
+            handler(self.mock_bot, self.accid, self.mock_event)
+            text = mock_send.call_args[0][3].text
+            self.assertIn(f"{cmd} is deprecated and disabled", text)
+            self.assertIn("/rmtransport", text)
+        self.assertIsNone(database.get_config("resilient"))
+        self.mock_bot.rpc.set_config.assert_not_called()
 
 class TestHelpPrivateReply(unittest.TestCase):
     """Plain /help in a group goes to the sender privately; /help@<bot> stays in the group."""

@@ -18,9 +18,9 @@ Start the bot. Add it to Delta Chat. Message the bot:
 - `/transports` to show configured mail relays and statistics (admin only)
 - `/addtransport` to add a backup mail relay (admin only)
 - `/rmtransport <addr>` to remove a mail relay (admin only)
-- `/setprimary <addr>` to switch the primary mail relay (admin only)
-- `/resilient` to toggle resilient sending mode across all relays (admin only)
 - `/help` to see all available commands
+
+Relay selection and failover are handled by the Delta Chat core (2.61+): it sends via the newest relay first and falls back to the next one if a relay is unreachable. `/transports` lists relays in that order. The former `/setprimary` and `/resilient` commands are deprecated and only reply with this explanation.
 
 ### Target-Specific Commands in Group Chats
 
@@ -71,7 +71,7 @@ The bot supports the following `ntfy` Priority values:
 
 ### Advanced Features
 
-- **Automatic Transport Failover**: Supports multiple mail servers. The bot automatically detects message delivery failures via raw core events, switches `configured_addr` to a backup transport in round-robin fashion, and schedules a resend of the message using exponential backoff (5s, 10s, 20s, 40s...) via an asynchronous timer thread (up to a maximum of 10 attempts per message) to prevent loop propagation and CPU spikes.
+- **Multiple Mail Relays**: Supports multiple mail servers. Relay selection and failover are handled by the Delta Chat core (2.61+), which sends via the newest relay first and falls back to the next one if a relay is unreachable.
 - **Header Aliases**: Use `t`/`ti` for Title, `p`/`prio` for Priority, `ta`/`tag` for Tags.
 - **Tags & Emojis 🥳**: Add emojis to your messages using the `Tags` header (e.g., `Tags: warning,skull`). Non-emoji tags are appended to the message text.
 - **Click Actions 🔗**: Use the `Click` header to add a clickable link to your notification.

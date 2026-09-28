@@ -52,14 +52,6 @@ class TestDatabase(unittest.TestCase):
         self.assertEqual(database.get_admin_fingerprint(), "A1B2C3D4E5F6")
 
     # ── Resilient Mode Flag Tests ───────────────────────────────────────────
-    def test_resilient_flag_toggle(self):
-        self.assertIsNone(database.get_config("resilient"))
-        database.set_config("resilient", "1")
-        self.assertEqual(database.get_config("resilient"), "1")
-        database.set_config("resilient", "0")
-        self.assertEqual(database.get_config("resilient"), "0")
-
-    # ── Subscription Tests ──────────────────────────────────────────────────
     def test_subscriptions(self):
         self.assertNotIn("alerts", database.get_subscriptions(100))
         self.assertTrue(database.subscribe(100, "alerts"))
