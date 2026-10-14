@@ -187,3 +187,7 @@ Run the unit test suite:
 ```bash
 python3 -m unittest discover -s tests -v
 ```
+
+## License
+
+MIT, see [LICENSE](LICENSE).

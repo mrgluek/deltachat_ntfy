@@ -34,7 +34,7 @@ import collections
 # Initialize logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("ntfy_bot")
-VERSION = "1.3.1"
+VERSION = "1.3.2"
 dc_cli = BotCli("ntfybot")
 bot_qr_cache = {} # Cache for secure join links to keep them stable on refresh
 index_page_html_cache = None
@@ -2377,8 +2377,7 @@ def newgroup_command(bot, accid, event):
         
         reply_text = (
             f"✅ Group '{group_name}' created!\n\n"
-            f"Join link: {qrdata}\n\n"
-            f"Share this link or scan the QR code to join the group. Once inside the group, use /sub to subscribe the group to topics!"
+            f"Join link: {qrdata}"
         )
         _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=reply_text))
     except Exception as e:

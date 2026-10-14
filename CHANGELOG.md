@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.2] - 2026-10-14
+- **Shorter `/newgroup` Reply**: dropped the "Share this link or scan the QR code…" line; the reply is now just the confirmation and the join link.
+- **MIT License**: the project is now licensed under MIT (`LICENSE`).
+
 ## [1.3.1] - 2026-10-14
 - **Fixed HTTP 500 on Non-UTF-8 Notifications**: Posts whose body was not valid UTF-8 (e.g. Windows PowerShell 5.1 `Invoke-RestMethod` without a charset, which sends Windows-1251) crashed `request.text()` with `UnicodeDecodeError`, so the notification was lost. The body is now read as bytes and decoded with the `Content-Type` charset if given, else UTF-8, else Windows-1251, else UTF-8 with replacement characters, so a notification is never rejected because of its encoding. JSON bodies are decoded the same way, and Topic/Title/Tags/Filename headers with non-UTF-8 bytes are re-decoded too.
 
