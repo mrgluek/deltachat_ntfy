@@ -20,6 +20,7 @@ from deltachat2 import events, MsgData
 from deltabot_cli import BotCli
 
 import database
+import transports_view
 
 try:
     import qrcode
@@ -32,7 +33,7 @@ import collections
 # Initialize logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("ntfy_bot")
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 dc_cli = BotCli("ntfybot")
 bot_qr_cache = {} # Cache for secure join links to keep them stable on refresh
 index_page_html_cache = None
@@ -485,15 +486,8 @@ async def handle_ntfy_post(request):
                     
                     logger.info(f"Calling send_msg for chat {dc_chat_id} on account {acc_id}...")
                     msg_id = dc_bot_instance.rpc.send_msg(acc_id, dc_chat_id, msg_data)
-                    logger.info(f"Successfully sent msg_id {msg_id} to chat {dc_chat_id} on account {acc_id}")
+                    logger.info(f"Queued msg_id {msg_id} for sending to chat {dc_chat_id} on account {acc_id}")
                     
-                    # Track sending stats
-                    try:
-                        addr = dc_bot_instance.rpc.get_config(acc_id, "configured_addr") or dc_bot_instance.rpc.get_config(acc_id, "addr")
-                        if addr:
-                            database.increment_transport_sent(addr)
-                    except Exception:
-                        pass
                         
                     success = True
                     break # Break out of account loop, we found it!
@@ -2156,14 +2150,6 @@ def on_new_message(bot, accid, event):
     if msg.is_info:
         return
         
-    # Track receiving stats
-    try:
-        # Use configured_addr (SMTP override) if set, otherwise fallback to main account addr
-        addr = bot.rpc.get_config(accid, "configured_addr") or bot.rpc.get_config(accid, "addr")
-        if addr:
-            database.increment_transport_received(addr)
-    except Exception:
-        pass
 
     text = (msg.text or "").strip()
     
@@ -2276,13 +2262,6 @@ def _publish_from_chat(bot, accid, topic, message, sender_chat_id, title=""):
                         msg_data.override_sender_name = f"#{topic}"
                     dc_bot_instance.rpc.send_msg(acc_id, dc_chat_id, msg_data)
                     
-                    # Track sending stats
-                    try:
-                        addr = dc_bot_instance.rpc.get_config(acc_id, "configured_addr") or dc_bot_instance.rpc.get_config(acc_id, "addr")
-                        if addr:
-                            database.increment_transport_sent(addr)
-                    except Exception:
-                        pass
                         
                     success = True
                     break
@@ -2487,15 +2466,8 @@ def _dc_send_msg_with_stats(bot, accid, chat_id, msg_data):
     try:
         msg_id = bot.rpc.send_msg(accid, chat_id, msg_data)
         
-        # Track success
-        try:
-            addr = bot.rpc.get_config(accid, "configured_addr") or bot.rpc.get_config(accid, "addr") or "unknown"
-            if addr != "unknown":
-                database.increment_transport_sent(addr)
-        except Exception:
-            pass
         
-        bot.logger.info(f"Successfully sent msg_id {msg_id} to chat {chat_id} on account {accid}")
+        bot.logger.info(f"Queued msg_id {msg_id} for sending to chat {chat_id} on account {accid}")
         return msg_id
     except Exception as e:
         bot.logger.error(f"Failed to send DC message to chat {chat_id} on account {accid}: {e}")
@@ -2571,77 +2543,9 @@ def transports_command(bot, accid, event):
         bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="No transports configured."))
         return
 
-    # Get connectivity status
-    connectivity_label = "❓ Unknown"
-    try:
-        connectivity = bot.rpc.get_connectivity(accid)
-        if connectivity >= 4000:
-            connectivity_label = "🟢 Connected"
-        elif connectivity >= 3000:
-            connectivity_label = "🔄 Working"
-        elif connectivity >= 2000:
-            connectivity_label = "🟡 Connecting"
-        else:
-            connectivity_label = "🔴 Not connected"
-    except Exception:
-        pass
-
-    # Get connectivity HTML to parse per-transport status
-    connectivity_html = ""
-    try:
-        connectivity_html = bot.rpc.get_connectivity_html(accid)
-    except Exception:
-        pass
-
-    # Get per-transport statistics from database
-    stats_map = {}
-    for s in database.get_all_transport_stats():
-        stats_map[s['addr']] = s
-
-    # The core tries the newest relay first when sending, so list newest first.
-    transport_addrs = []
-    for t in reversed(transports):
-        addr = t.get('addr', '') if isinstance(t, dict) else getattr(t, 'addr', '')
-        transport_addrs.append(addr)
-
-    reply = f"🔌 **Mail Relays (Transports)**\n\nStatus: {connectivity_label}\nSending order: top to bottom (core falls back to the next relay if one is unreachable)\n\n"
-
-    import re
-    for idx, addr in enumerate(transport_addrs, 1):
-        # Determine status label from HTML
-        status_label = "❓ Unknown"
-        if connectivity_html:
-            domain = addr.split('@')[-1] if '@' in addr else addr
-            pattern = rf'class="([^"]+)\s+dot".*?<b>{re.escape(domain)}:</b>\s*([^<]+)'
-            match = re.search(pattern, connectivity_html, re.IGNORECASE)
-            if match:
-                color = match.group(1).lower()
-                status_text = match.group(2).strip().lower()
-                if "yellow" in color or "connecting" in status_text:
-                    status_label = "🟡 Connecting"
-                elif "green" in color:
-                    status_label = "🔄 Working"
-                elif "red" in color or "lost" in status_text or "error" in status_text:
-                    status_label = "🔴 Not connected"
-
-        reply += f"{idx}. **{status_label}:** `{addr}`\n"
-
-        stats = stats_map.get(addr)
-        if stats:
-            reply += f"  📤 Sent: {stats['msgs_sent']}  📥 Received: {stats['msgs_received']}\n"
-            if stats.get('last_sent_at'):
-                import datetime
-                last_sent = datetime.datetime.fromtimestamp(stats['last_sent_at']).strftime('%Y-%m-%d %H:%M')
-                reply += f"  Last sent: {last_sent}\n"
-            if stats.get('last_received_at'):
-                import datetime
-                last_recv = datetime.datetime.fromtimestamp(stats['last_received_at']).strftime('%Y-%m-%d %H:%M')
-                reply += f"  Last received: {last_recv}\n"
-        else:
-            reply += f"  📤 Sent: 0  📥 Received: 0\n"
-        reply += "\n"
-
-    reply += f"Total transports: {len(transport_addrs)}"
+    # Which relay the core really sends through, its send queue, and per-relay
+    # incoming status and storage (see transports_view.py).
+    reply = transports_view.build_transports_report(bot.rpc, accid, transports)
     _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=reply))
 
 @dc_cli.on(events.NewMessage(command="/addtransport"))

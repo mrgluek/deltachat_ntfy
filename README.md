@@ -15,12 +15,12 @@ Start the bot. Add it to Delta Chat. Message the bot:
 - `/list` to list your subscribed topics
 - `/last` to see the last 5 notifications from your subscribed topics
 - `/stats` to see the number of notifications received in the last 24 hours
-- `/transports` to show configured mail relays and statistics (admin only)
+- `/transports` to show mail relays: relay used for sending, send queue, incoming status and storage (admin only)
 - `/addtransport` to add a backup mail relay (admin only)
 - `/rmtransport <addr>` to remove a mail relay (admin only)
 - `/help` to see all available commands
 
-Relay selection and failover are handled by the Delta Chat core (2.61+): it sends via the newest relay first and falls back to the next one if a relay is unreachable. `/transports` lists relays in that order. The former `/setprimary` and `/resilient` commands are deprecated and only reply with this explanation.
+Relay selection and failover are handled by the Delta Chat core (2.61+): it keeps sending through the relay that last worked and moves to the next one only if it cannot connect, so the relay used for sending can differ from the account's main address. `/transports` shows which relay that is, the core's send queue, and per relay the incoming status, the last received message and mailbox storage. The former `/setprimary` and `/resilient` commands are deprecated and only reply with this explanation.
 
 ### Target-Specific Commands in Group Chats
 
