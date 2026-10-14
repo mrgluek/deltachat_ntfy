@@ -1,4 +1,5 @@
 import asyncio
+import codecs
 import io
 import ipaddress
 import logging
@@ -33,7 +34,7 @@ import collections
 # Initialize logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("ntfy_bot")
-VERSION = "1.3.0"
+VERSION = "1.3.1"
 dc_cli = BotCli("ntfybot")
 bot_qr_cache = {} # Cache for secure join links to keep them stable on refresh
 index_page_html_cache = None
@@ -294,6 +295,56 @@ def format_notification(title: str, message: str, priority_raw: str, tags_raw: s
         
     return formatted
 
+def _charset_from_content_type(content_type: str) -> str | None:
+    """Return the charset named in a Content-Type header, or None if absent or unknown."""
+    for part in (content_type or "").split(";")[1:]:
+        key, _, value = part.strip().partition("=")
+        if key.strip().lower() == "charset":
+            charset = value.strip().strip('"\'')
+            try:
+                # codecs.lookup rejects names Python does not know, e.g. a typo'd charset.
+                return codecs.lookup(charset).name
+            except LookupError:
+                return None
+    return None
+
+
+def decode_body(raw: bytes, content_type: str = "") -> str:
+    """Decode a request body without ever failing.
+
+    Order: charset from Content-Type (if valid), UTF-8, cp1251, then UTF-8 with
+    replacement characters. cp1251 is the fallback because Windows PowerShell 5.1
+    (Invoke-RestMethod without a charset) sends the system ANSI code page, which
+    is cp1251 for our Russian-speaking users. cp1251 maps almost every byte, so it
+    must come after UTF-8: valid UTF-8 would otherwise turn into mojibake.
+    """
+    candidates = [_charset_from_content_type(content_type), "utf-8", "cp1251"]
+    for charset in candidates:
+        if not charset:
+            continue
+        try:
+            return raw.decode(charset)
+        except UnicodeDecodeError:
+            continue
+    return raw.decode("utf-8", errors="replace")
+
+
+def fix_header_text(value: str) -> str:
+    """Re-decode a header value that held non-UTF-8 bytes.
+
+    aiohttp decodes header bytes as UTF-8 with "surrogateescape", so invalid bytes
+    end up as lone surrogates (U+DC80..U+DCFF) that later break JSON/RPC encoding.
+    Turn them back into the original bytes and decode those like a body.
+    """
+    if not value or not any("\udc80" <= ch <= "\udcff" for ch in value):
+        return value
+    try:
+        raw = value.encode("utf-8", errors="surrogateescape")
+    except UnicodeEncodeError:
+        return value.encode("utf-8", errors="replace").decode("utf-8")
+    return decode_body(raw)
+
+
 async def handle_ntfy_post(request):
     topic = request.match_info.get('topic')
     
@@ -335,7 +386,11 @@ async def handle_ntfy_post(request):
     click_raw = request.headers.get('Click') or request.headers.get('X-Click', '')
     attach_url = request.headers.get('Attach') or request.headers.get('X-Attach', '')
     filename = request.headers.get('Filename') or request.headers.get('X-Filename') or request.headers.get('File') or request.headers.get('f', '')
+    # Header values from non-UTF-8 clients arrive with surrogate escapes; fix them up.
+    topic, title, tags_raw, filename = (fix_header_text(v) if isinstance(v, str) else v
+                                         for v in (topic, title, tags_raw, filename))
     
+
     file_path = None
     message = ""
     
@@ -343,7 +398,8 @@ async def handle_ntfy_post(request):
     content_type = request.headers.get('Content-Type', '')
     if 'application/json' in content_type:
         try:
-            data = await request.json()
+            # Read bytes and decode ourselves: request.json()/text() raise on non-UTF-8 bodies.
+            data = json.loads(decode_body(await request.read(), content_type))
             if not topic:
                 topic = data.get('topic')
             message = data.get('message', '')
@@ -359,7 +415,7 @@ async def handle_ntfy_post(request):
                     tags_raw = str(data['tags'])
         except Exception as e:
             logger.error(f"Failed to parse JSON body: {e}")
-            message = await request.text()
+            message = decode_body(await request.read(), content_type)
     else:
         if filename and not attach_url:
             # Direct binary body upload (Step 6)
@@ -372,7 +428,7 @@ async def handle_ntfy_post(request):
                 file_path = f.name
                 message = "📎 File attachment" # Default message if only file is sent
         else:
-            message = await request.text()
+            message = decode_body(await request.read(), content_type)
             
     # External attachment from URL (Step 5)
     if attach_url and not file_path:

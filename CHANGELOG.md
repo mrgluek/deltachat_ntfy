@@ -5,6 +5,9 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.1] - 2026-10-14
+- **Fixed HTTP 500 on Non-UTF-8 Notifications**: Posts whose body was not valid UTF-8 (e.g. Windows PowerShell 5.1 `Invoke-RestMethod` without a charset, which sends Windows-1251) crashed `request.text()` with `UnicodeDecodeError`, so the notification was lost. The body is now read as bytes and decoded with the `Content-Type` charset if given, else UTF-8, else Windows-1251, else UTF-8 with replacement characters, so a notification is never rejected because of its encoding. JSON bodies are decoded the same way, and Topic/Title/Tags/Filename headers with non-UTF-8 bytes are re-decoded too.
+
 ## [1.3.0] - 2026-10-14
 - **`/transports` Shows the Relay Actually Used for Sending**: Since core 2.61 the core sends through the relay that last worked and switches only when it cannot connect, so the main address (`configured_addr`) says nothing about where mail goes out. `/transports` now lists relays in the order the core tries them, with the current sending relay first, shows the core's send queue (waiting messages and retries) and outgoing status, and per relay the incoming status, when the last message arrived, mailbox storage usage (⚠️ from 80%) and when it was added. The sending order and queue are read from the core's account database (read-only); the report is built by the shared `transports_view.py`.
 - **Removed Misleading Per-Relay Sent/Received Counters**: They credited every message to `configured_addr` (or, in some places, the wrong address), so the numbers and "last sent" dates were wrong once the core sent through another relay. Counting them also cost extra RPC calls per message. The `transport_stats` table is left in place but no longer updated.

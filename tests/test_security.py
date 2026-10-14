@@ -186,8 +186,7 @@ class TestSecurity(unittest.TestCase):
         req.path = "/alerts"
 
         async def _test():
-            req.json = AsyncMock(side_effect=Exception("not json"))
-            req.text = AsyncMock(return_value="Server alert")
+            req.read = AsyncMock(return_value=b"Server alert")
             resp = await bot.handle_ntfy_post(req)
             self.assertEqual(resp.status, 200)
 
@@ -218,8 +217,7 @@ class TestSecurity(unittest.TestCase):
             bot.is_rate_limited("203.0.113.99")
 
         async def _test():
-            req.json = AsyncMock(side_effect=Exception("not json"))
-            req.text = AsyncMock(return_value="msg")
+            req.read = AsyncMock(return_value=b"msg")
             resp = await bot.handle_ntfy_post(req)
             self.assertEqual(resp.status, 429)
             self.assertEqual(resp.headers.get("Retry-After"), "60")
@@ -232,6 +230,66 @@ class TestSecurity(unittest.TestCase):
         import inspect
         src = inspect.getsource(bot._run_web_server)
         self.assertIn("client_max_size", src)
+
+class TestBodyDecoding(unittest.TestCase):
+    """Publish bodies must never be rejected because of their encoding."""
+
+    RU = "Тревога: диск заполнен\u00a0на 95%"  # \u00a0 is the 0xA0 byte seen in production
+
+    def test_decode_body_utf8(self):
+        self.assertEqual(bot.decode_body(self.RU.encode("utf-8"), "text/plain"), self.RU)
+
+    def test_decode_body_cp1251_without_charset(self):
+        # Windows PowerShell 5.1 Invoke-RestMethod sends the ANSI code page, no charset.
+        self.assertEqual(bot.decode_body(self.RU.encode("cp1251"), ""), self.RU)
+
+    def test_decode_body_explicit_charset(self):
+        raw = self.RU.encode("koi8-r", errors="replace")
+        self.assertEqual(bot.decode_body(raw, 'text/plain; charset="KOI8-R"'),
+                         raw.decode("koi8-r"))
+        # latin-1 must win over the UTF-8/cp1251 guesses when the client names it.
+        self.assertEqual(bot.decode_body(b"caf\xe9", "text/plain; charset=iso-8859-1"), "café")
+
+    def test_decode_body_unknown_charset_falls_back(self):
+        self.assertEqual(bot.decode_body("ok ✓".encode("utf-8"), "text/plain; charset=bogus-42"), "ok ✓")
+
+    def test_decode_body_never_raises(self):
+        # 0x98 is undefined in cp1251, so every strict attempt fails -> replacement.
+        self.assertIn("\ufffd", bot.decode_body(b"\x98\xff", ""))
+
+    def test_fix_header_text(self):
+        escaped = "Диск".encode("cp1251").decode("utf-8", errors="surrogateescape")
+        self.assertEqual(bot.fix_header_text(escaped), "Диск")
+        self.assertEqual(bot.fix_header_text("plain"), "plain")
+
+    def _post(self, raw, content_type="", headers=None):
+        req = MagicMock()
+        req.match_info = {"topic": "alerts"}
+        req.headers = {"X-Forwarded-For": "203.0.113.50", "Content-Type": content_type, **(headers or {})}
+        req.query = {}
+        req.path = "/alerts"
+        req.read = AsyncMock(return_value=raw)
+        with patch("bot.database.add_notification") as add, \
+             patch("bot.database.get_subscribers", return_value=[]):
+            resp = asyncio.run(bot.handle_ntfy_post(req))
+        return resp, add.call_args[0]
+
+    def test_handle_ntfy_post_cp1251_body(self):
+        resp, (topic, title, message, _prio) = self._post(self.RU.encode("cp1251"))
+        self.assertEqual(resp.status, 200)
+        self.assertEqual(message, self.RU)
+
+    def test_handle_ntfy_post_json_cp1251_body(self):
+        raw = ('{"topic": "alerts", "title": "Сбой", "message": "%s"}' % self.RU).encode("cp1251")
+        resp, (_topic, title, message, _prio) = self._post(raw, "application/json")
+        self.assertEqual(resp.status, 200)
+        self.assertEqual((title, message), ("Сбой", self.RU))
+
+    def test_handle_ntfy_post_non_utf8_title_header(self):
+        title = "Сбой".encode("cp1251").decode("utf-8", errors="surrogateescape")
+        resp, (_topic, got_title, message, _prio) = self._post(b"body", headers={"Title": title})
+        self.assertEqual(resp.status, 200)
+        self.assertEqual(got_title, "Сбой")
 
 if __name__ == "__main__":
     unittest.main()

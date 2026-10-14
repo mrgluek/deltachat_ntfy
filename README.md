@@ -78,6 +78,7 @@ The bot supports the following `ntfy` Priority values:
 - **Attachments 📎**:
   - **External URL**: Use `Attach: http://...` to have the bot download and send a file to the chat.
   - **Direct Upload**: Use `curl -T file.jpg -H 'Filename: file.jpg'` to upload a file directly as the message body.
+- **Any Text Encoding 🔤**: Message bodies (plain text and JSON) and the Title/Tags headers are accepted in any encoding. The bot uses the `charset` from `Content-Type` if given, otherwise tries UTF-8 and then Windows-1251 (what Windows PowerShell 5.1 `Invoke-RestMethod` sends without a charset); undecodable bytes become `�` instead of failing the request.
 - **Group Support 👥**: Add the bot to any group and use `/sub <topic>` inside the group. The bot will appear to send messages on behalf of the topic (e.g., as `#topic`) using the `override_sender_name` feature.
 
 ### Testing Examples
