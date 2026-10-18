@@ -152,15 +152,14 @@ class TestHelpers(unittest.TestCase):
         
         bot.url_command(mock_bot, 1, mock_event)
         
-        # Verify it rejects with administrator error message
-        mock_bot.rpc.send_msg.assert_called_once_with(
-            1, 789, ANY
-        )
-        msg_data = mock_bot.rpc.send_msg.call_args[0][2]
+        # Verify it rejects with administrator error message (every reply goes through the outbox wrapper)
+        mock_send_with_stats.assert_called_once_with(mock_bot, 1, 789, ANY)
+        msg_data = mock_send_with_stats.call_args[0][3]
         self.assertIn("only for the administrator", msg_data.text)
         
         # 2. Test admin access, payload is empty (query current URL)
         mock_bot.reset_mock()
+        mock_send_with_stats.reset_mock()
         mock_is_admin.return_value = True
         mock_event.payload = ""
         

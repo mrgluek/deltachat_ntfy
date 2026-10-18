@@ -22,6 +22,7 @@ from deltabot_cli import BotCli
 
 import database
 import transports_view
+from outbox import outbox as dc_outbox, PRIO_URGENT, PRIO_REPLY, PRIO_NORMAL, PRIO_LOW
 
 try:
     import qrcode
@@ -34,7 +35,7 @@ import collections
 # Initialize logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("ntfy_bot")
-VERSION = "1.3.2"
+VERSION = "1.4.0"
 dc_cli = BotCli("ntfybot")
 bot_qr_cache = {} # Cache for secure join links to keep them stable on refresh
 index_page_html_cache = None
@@ -236,6 +237,53 @@ def linkify(text):
     # Wrap URLs
     url_pattern = re.compile(r'(https?://[^\s<>"]+)')
     return url_pattern.sub(r'<a href="\1" target="_blank" rel="noopener noreferrer">\1</a>', text)
+
+def outbox_priority(priority_int: int | None) -> int:
+    """Send order for a notification: ntfy priority 4-5 before command replies, 1-2 last."""
+    if priority_int and priority_int >= 4:
+        return PRIO_URGENT
+    if priority_int and priority_int <= 2:
+        return PRIO_LOW
+    return PRIO_NORMAL
+
+
+def queue_notification(acc_id, dc_chat_id, msg_data, priority: int, topic: str):
+    """Queues one notification for one chat in the paced outbox; returns the send's Future."""
+    return dc_outbox.submit(lambda: dc_bot_instance.rpc.send_msg(acc_id, dc_chat_id, msg_data),
+                            priority=priority, label=f"#{topic} to chat {dc_chat_id}")
+
+
+def remove_file_when_sent(path: str | None, futures: list) -> None:
+    """Deletes an attachment's temp file after the last queued send that uses it.
+
+    The core copies the file into its blob directory when send_msg runs - with the outbox that
+    can be minutes after the HTTP request, so the file must outlive the request."""
+    if not path:
+        return
+
+    def remove():
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except Exception as e:
+            logger.error(f"Failed to delete temp file {path}: {e}")
+
+    if not futures:
+        remove()
+        return
+    left = [len(futures)]
+    lock = threading.Lock()
+
+    def one_done(_):
+        with lock:
+            left[0] -= 1
+            last = left[0] == 0
+        if last:
+            remove()
+
+    for f in futures:
+        f.add_done_callback(one_done)
+
 
 def parse_priority(priority_raw: str) -> int:
     priority_raw = str(priority_raw).lower()
@@ -506,6 +554,7 @@ async def handle_ntfy_post(request):
 
     # Broadcast to subscribers
     subscribers = database.get_subscribers(topic)
+    sends = []  # queued sends; the attachment's temp file is removed after the last one
     if subscribers and dc_bot_instance and dc_accid is not None:
         for dc_chat_id in subscribers:
             logger.info(f"Preparing to send topic '{topic}' to chat {dc_chat_id}...")
@@ -540,11 +589,8 @@ async def handle_ntfy_post(request):
                     if not is_private:
                         msg_data.override_sender_name = f"#{topic}"
                     
-                    logger.info(f"Calling send_msg for chat {dc_chat_id} on account {acc_id}...")
-                    msg_id = dc_bot_instance.rpc.send_msg(acc_id, dc_chat_id, msg_data)
-                    logger.info(f"Queued msg_id {msg_id} for sending to chat {dc_chat_id} on account {acc_id}")
-                    
-                        
+                    sends.append(queue_notification(acc_id, dc_chat_id, msg_data, outbox_priority(priority_int), topic))
+                    logger.info(f"Queued topic '{topic}' for chat {dc_chat_id} on account {acc_id}")
                     success = True
                     break # Break out of account loop, we found it!
                 except Exception as e:
@@ -557,13 +603,8 @@ async def handle_ntfy_post(request):
 
             if not success:
                 logger.warning(f"Could not find chat {dc_chat_id} on any configured account.")
-                
-        # Clean up temp file
-        if file_path and os.path.exists(file_path):
-            try:
-                os.remove(file_path)
-            except Exception as e:
-                logger.error(f"Failed to delete temp file {file_path}: {e}")
+
+    remove_file_when_sent(file_path, sends)
 
     return web.json_response({"id": "ntfy-compat", "time": int(time.time()), "event": "message", "topic": topic, "message": message})
 
@@ -1651,7 +1692,7 @@ async def publish_stats():
                     msg_data = MsgData(text=formatted_msg)
                     if not is_private:
                         msg_data.override_sender_name = f"#{topic}"
-                    dc_bot_instance.rpc.send_msg(acc_id, dc_chat_id, msg_data)
+                    queue_notification(acc_id, dc_chat_id, msg_data, PRIO_LOW, topic)
                     success = True
                     break
                 except Exception:
@@ -1742,7 +1783,7 @@ def debug_command(bot, accid, event):
     except Exception as e:
         debug_msg += f"Failed to get your chat type: {e}\n"
         
-    bot.rpc.send_msg(accid, chat_id, MsgData(text=debug_msg))
+    _dc_send_msg_with_stats(bot, accid, chat_id, MsgData(text=debug_msg))
 
 
 @dc_cli.on_init
@@ -1888,6 +1929,7 @@ def on_start(bot, _args):
     global dc_bot_instance, dc_accid
     setup_custom_command_parser(bot, ["ntfy"])
     dc_bot_instance = bot
+    dc_outbox.start()  # from now on messages are queued and paced instead of sent inline
     accounts = bot.rpc.get_all_account_ids()
     if accounts:
         dc_accid = accounts[0]
@@ -2218,10 +2260,10 @@ def on_new_message(bot, accid, event):
         # Basic validation: topic should not have spaces or further slashes
         if topic and " " not in topic and "/" not in topic:
             if database.subscribe(msg.chat_id, topic):
-                bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"✅ Subscribed to '{topic}' via link"))
+                _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"✅ Subscribed to '{topic}' via link"))
                 bot.logger.info(f"Subscribed chat {msg.chat_id} to '{topic}' via URL detection")
             else:
-                bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"ℹ️ Already subscribed to '{topic}'"))
+                _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"ℹ️ Already subscribed to '{topic}'"))
             return
 
     # 2. Reply-to-notification: if user replies to a bot message with [topic] prefix, post to that topic
@@ -2234,7 +2276,7 @@ def on_new_message(bot, accid, event):
             if topic_match:
                 reply_topic = topic_match.group(1)
                 _publish_from_chat(bot, accid, reply_topic, text, msg.chat_id)
-                bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"✅ Sent to `{reply_topic}`"))
+                _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"✅ Sent to `{reply_topic}`"))
                 return
     except Exception as e:
         bot.logger.error(f"Error in reply-to-notification check: {e}")
@@ -2255,7 +2297,7 @@ def on_new_message(bot, accid, event):
             if not database.get_config(greeted_key):
                 bot.logger.info(f"New user detected, sending welcome to chat {msg.chat_id}")
                 help_text = get_help_text(bot, accid, msg.from_id)
-                bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=help_text))
+                _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=help_text))
                 database.set_config(greeted_key, "1")
     except Exception as e:
         bot.logger.error(f"Error in greeting check: {e}")
@@ -2316,9 +2358,7 @@ def _publish_from_chat(bot, accid, topic, message, sender_chat_id, title=""):
                     msg_data = MsgData(text=formatted_msg)
                     if not is_private:
                         msg_data.override_sender_name = f"#{topic}"
-                    dc_bot_instance.rpc.send_msg(acc_id, dc_chat_id, msg_data)
-                    
-                        
+                    queue_notification(acc_id, dc_chat_id, msg_data, outbox_priority(priority_int), topic)
                     success = True
                     break
                 except Exception as e:
@@ -2336,13 +2376,13 @@ def send_command(bot, accid, event):
     payload = event.payload.strip()
 
     if not payload or " " not in payload:
-        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="Usage: /send <topic> [**title**] <message>"))
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="Usage: /send <topic> [**title**] <message>"))
         return
 
     topic, rest = payload.split(" ", 1)
     rest = rest.strip()
     if not rest:
-        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="Usage: /send <topic> [**title**] <message>"))
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="Usage: /send <topic> [**title**] <message>"))
         return
 
     # Parse optional **title** at the beginning
@@ -2361,7 +2401,7 @@ def send_command(bot, accid, event):
     confirm = f"✅ Sent to `{topic}`"
     if title:
         confirm += f" (title: {title})"
-    bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=confirm))
+    _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=confirm))
 
 
 @dc_cli.on(events.NewMessage(command="/newgroup"))
@@ -2382,7 +2422,7 @@ def newgroup_command(bot, accid, event):
         _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=reply_text))
     except Exception as e:
         bot.logger.error(f"Failed to create group: {e}")
-        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"❌ Failed to create group: {e}"))
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"❌ Failed to create group: {e}"))
 
 @dc_cli.on(events.NewMessage(command="/donate"))
 def donate_command(bot, accid, event):
@@ -2405,7 +2445,7 @@ def accounts_command(bot, accid, event):
     
     admin_email = database.get_config("admin_dc_email")
     if not admin_email or admin_email.lower() != sender_email.lower():
-        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="❌ This command is only for the administrator."))
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ This command is only for the administrator."))
         return
         
     accounts = bot.rpc.get_all_account_ids()
@@ -2426,17 +2466,17 @@ def accounts_command(bot, accid, event):
 def rmaccount_command(bot, accid, event):
     msg = event.msg
     if not _is_dc_admin(bot, accid, msg.from_id):
-        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="❌ This command is only for the administrator."))
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ This command is only for the administrator."))
         return
         
     try:
         target_aid = int(event.payload.strip())
     except ValueError:
-        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="❌ Usage: /rmaccount <account_id>"))
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Usage: /rmaccount <account_id>"))
         return
         
     if target_aid == accid:
-        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="❌ You cannot delete the account you are currently using to talk to the bot!"))
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ You cannot delete the account you are currently using to talk to the bot!"))
         return
         
     try:
@@ -2446,9 +2486,9 @@ def rmaccount_command(bot, accid, event):
         else:
             bot.rpc.delete_account(target_aid)
         clear_index_cache()
-        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"✅ Account {target_aid} has been successfully deleted."))
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"✅ Account {target_aid} has been successfully deleted."))
     except Exception as e:
-        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"❌ Failed to delete account {target_aid}: {e}"))
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"❌ Failed to delete account {target_aid}: {e}"))
 
 @dc_cli.on(events.NewMessage(command="/sub"))
 def sub_command(bot, accid, event):
@@ -2456,13 +2496,13 @@ def sub_command(bot, accid, event):
     topic = event.payload.strip()
     
     if not topic:
-        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="Usage: /sub <topic>"))
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="Usage: /sub <topic>"))
         return
         
     if database.subscribe(msg.chat_id, topic):
-        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"✅ Subscribed to '{topic}'"))
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"✅ Subscribed to '{topic}'"))
     else:
-        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"ℹ️ Already subscribed to '{topic}'"))
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"ℹ️ Already subscribed to '{topic}'"))
 
 @dc_cli.on(events.NewMessage(command="/unsub"))
 def unsub_command(bot, accid, event):
@@ -2470,13 +2510,13 @@ def unsub_command(bot, accid, event):
     topic = event.payload.strip()
     
     if not topic:
-        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="Usage: /unsub <topic>"))
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="Usage: /unsub <topic>"))
         return
         
     if database.unsubscribe(msg.chat_id, topic):
-        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"✅ Unsubscribed from '{topic}'"))
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"✅ Unsubscribed from '{topic}'"))
     else:
-        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text=f"ℹ️ You were not subscribed to '{topic}'"))
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"ℹ️ You were not subscribed to '{topic}'"))
 
 @dc_cli.on(events.NewMessage(command="/list"))
 def list_command(bot, accid, event):
@@ -2484,7 +2524,7 @@ def list_command(bot, accid, event):
     topics = database.get_subscriptions(msg.chat_id)
     
     if not topics:
-        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="You are not subscribed to any topics."))
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="You are not subscribed to any topics."))
         return
         
     bot_url = database.get_config("bot_url") or "https://ntfy.gluek.info"
@@ -2498,7 +2538,7 @@ def last_command(bot, accid, event):
     topics = database.get_subscriptions(msg.chat_id)
     
     if not topics:
-        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="You are not subscribed to any topics, so there are no notifications."))
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="You are not subscribed to any topics, so there are no notifications."))
         return
         
     recent = database.get_recent_notifications(topics, limit=5)
@@ -2516,17 +2556,16 @@ def last_command(bot, accid, event):
         
     _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="\n".join(lines)))
 
-def _dc_send_msg_with_stats(bot, accid, chat_id, msg_data):
-    """Wrapper for bot.rpc.send_msg that tracks stats."""
-    try:
-        msg_id = bot.rpc.send_msg(accid, chat_id, msg_data)
-        
-        
-        bot.logger.info(f"Queued msg_id {msg_id} for sending to chat {chat_id} on account {accid}")
-        return msg_id
-    except Exception as e:
-        bot.logger.error(f"Failed to send DC message to chat {chat_id} on account {accid}: {e}")
-        raise e
+def _dc_send_msg_with_stats(bot, accid, chat_id, msg_data, priority=PRIO_REPLY):
+    """Sends a message through the paced outbox (see outbox.py); default priority: a command reply.
+
+    Returns the msg_id when it was sent right away (outbox not started, as in tests; a failure
+    is raised then), else None: the message is queued and goes out in its turn."""
+    fut = dc_outbox.submit(lambda: bot.rpc.send_msg(accid, chat_id, msg_data), priority=priority,
+                           label=f"message to chat {chat_id}")
+    if fut.done():
+        return fut.result()
+    return None
 
 RELAY_SELECTION_NOTE = (
     "Since core 2.61 the core picks the sending relay itself: it tries the newest relay first "
@@ -2566,7 +2605,7 @@ def stats_command(bot, accid, event):
 def url_command(bot, accid, event):
     msg = event.msg
     if not _is_dc_admin(bot, accid, msg.from_id):
-        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="❌ This command is only for the administrator."))
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ This command is only for the administrator."))
         return
         
     url = event.payload.strip()
@@ -2595,7 +2634,7 @@ def transports_command(bot, accid, event):
         return
 
     if not transports:
-        bot.rpc.send_msg(accid, msg.chat_id, MsgData(text="No transports configured."))
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="No transports configured."))
         return
 
     # Which relay the core really sends through, its send queue, and per-relay
