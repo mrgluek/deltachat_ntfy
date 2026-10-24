@@ -111,25 +111,25 @@ curl -X POST https://ntfy.gluek.info/test \
   -d 'Everything is working perfectly! Check the attached logo and link.'
 ```
 
-### Account Setup
+### Account Setup (Optional)
 
-Before running the bot, you must initialize at least one Delta Chat account.
+Skip this step and the bot creates its account by itself at first start: the Delta Chat core (2.62+) picks the fastest chatmail relay from its built-in list and later adds further relays in the background. The new address is logged (`docker compose logs ntfy_bot`). If no relay answers, the bot exits and the container restart tries again.
 
-**Manual Setup (Custom Email/Password)**
-If you want to use a specific email account:
+To choose the account yourself, initialize it before the first start with your email and password, or with `DCACCOUNT:server.tld` for an account on a specific chatmail relay:
 
 ```bash
 docker compose run --rm ntfy_bot python bot.py init bot@example.com "YOUR_PASSWORD"
+docker compose run --rm ntfy_bot python bot.py init DCACCOUNT:nine.testrun.org
 ```
 
-**Automatic Setup (Chatmail)**
-If you want to use a chatmail server (which doesn't require a pre-existing password for new accounts), choose a desired address at a chatmail domain (e.g., `nine.testrun.org`):
+Configure the admin on the server (or do it later inside the bot chat with the `/initadmin` command):
 
 ```bash
-docker compose run --rm ntfy_bot python bot.py init mybot@nine.testrun.org
+docker compose run --rm ntfy_bot python set_admin.py --email admin@example.com
+docker compose run --rm ntfy_bot python set_admin.py --fingerprint 1234ABCD1234ABCD1234ABCD1234ABCD1234ABCD
 ```
 
-Once configured, you can start the bot normally with `docker compose up -d`.
+Then start the bot normally with `docker compose up -d`.
 
 **Backup Relays (Multi-transport)**
 You can add secondary mail servers to ensure the bot remains reachable if your primary server goes down:
@@ -159,9 +159,15 @@ You can also manage transports directly in Delta Chat using `/addtransport` and 
 ### Using Docker (Recommended)
 
 1. Clone the repository
-2. Initialize the account as described in the **Account Setup** section above.
+2. Optional: choose the account and admin as described in the **Account Setup (Optional)** section above. Without it, the bot creates its own chatmail account at first start.
 3. Start the bot: `docker compose up -d`
 4. Message the bot in Delta Chat and use `/initadmin` to claim ownership.
+
+### Updating and Releases
+
+Run `./update.sh` (e.g. from cron) to deploy the newest release: the highest `vX.Y.Z` tag, from GitHub or, when GitHub is unreachable, from the Forgejo mirror; `-f` rebuilds the container without changes. Commits on `main` that are not released yet are not deployed. In `.env.local`, `UPDATE_REF=v1.4.0` stays on that release (to roll back; remove it to follow new releases again), `UPDATE_REF=main` follows the branch, and `MONITOR_URL` pings a healthcheck on start, success and failure.
+
+Releasing: merge, then `git tag -a vX.Y.Z -m "..." <commit> && git push origin vX.Y.Z`. Pushing the tag (`.github/workflows/release.yml`) checks that `VERSION` in `bot.py` matches, publishes the GitHub release with that version's `CHANGELOG.md` section, and sends the ntfy notification and the Home Assistant add-on sync.
 
 ### Running Manually
 
