@@ -35,7 +35,10 @@ import collections
 # Initialize logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("ntfy_bot")
-VERSION = "1.5.0"
+VERSION = "1.5.1"
+# Attachments over 64 KB are not downloaded automatically. Not 1 byte: the core then also defers
+# every plain text message (commands, links) to a one-by-one "download later", which delays replies.
+DOWNLOAD_LIMIT = 65536
 dc_cli = BotCli("ntfybot")
 bot_qr_cache = {} # Cache for secure join links to keep them stable on refresh
 index_page_html_cache = None
@@ -1846,8 +1849,8 @@ def on_init(bot, args):
         # Auto-delete messages after 24 hours to save disk space
         bot.rpc.set_config(accid, "delete_device_after", "86400")
         try:
-            bot.rpc.set_config(accid, "download_limit", "1")
-            bot.logger.info("Configured auto-download limit (1 byte) in on_init.")
+            bot.rpc.set_config(accid, "download_limit", str(DOWNLOAD_LIMIT))
+            bot.logger.info("Configured auto-download limit (64 KB) in on_init.")
         except Exception as e:
             bot.logger.warning(f"Could not configure storage optimization in on_init: {e}")
         # Set bot avatar if icon file exists
@@ -1958,9 +1961,9 @@ def on_start(bot, _args):
     if accounts:
         dc_accid = accounts[0]
         try:
-            bot.rpc.set_config(dc_accid, "download_limit", "1")
+            bot.rpc.set_config(dc_accid, "download_limit", str(DOWNLOAD_LIMIT))
             bot.rpc.set_config(dc_accid, "delete_device_after", "86400")
-            bot.logger.info("Successfully set auto-download limit to 1 byte and delete_device_after to 24 hours to optimize storage.")
+            bot.logger.info("Successfully set auto-download limit to 64 KB and delete_device_after to 24 hours to optimize storage.")
         except Exception as e:
             bot.logger.error(f"Failed to set storage optimization settings in on_start: {e}")
         
