@@ -1,6 +1,6 @@
 deltabot-cli==8.1.2
 deltachat2[full]<1.0.0
-deltachat-rpc-server==2.65.0
+deltachat-rpc-server==2.66.0
 aiohttp>=3.10.5,<4.0.0
 qrcode>=7.4.2,<8.0.0
 emoji>=2.12.0,<3.0.0

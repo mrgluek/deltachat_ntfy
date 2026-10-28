@@ -36,7 +36,7 @@ import collections
 # Initialize logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("ntfy_bot")
-VERSION = "1.5.2"
+VERSION = "1.6.0"
 # Attachments over 64 KB are not downloaded automatically. Not 1 byte: the core then also defers
 # every plain text message (commands, links) to a one-by-one "download later", which delays replies.
 DOWNLOAD_LIMIT = 65536
@@ -1806,7 +1806,7 @@ def ensure_configured_account(bot, args) -> None:
     try:
         bot.rpc.set_config(accid, "bot", "1")
         bot.rpc.init_transports(accid, None)
-        addr = bot.rpc.get_config(accid, "configured_addr")
+        addr = dc_fingerprint.get_self_addr(bot.rpc, accid)
         bot.logger.info(f"Account created: {addr}")
     except Exception as e:
         # serve then exits with "no configured accounts" and the container restart retries
@@ -2407,7 +2407,7 @@ def accounts_command(bot, accid, event):
     
     for aid in accounts:
         try:
-            addr = bot.rpc.get_config(aid, "addr")
+            addr = dc_fingerprint.get_self_addr(bot.rpc, aid)
             state = bot.rpc.get_config(aid, "configured")
             reply += f"• Account ID: {aid}\n  Email: {addr}\n  Configured: {state}\n\n"
         except Exception as e:
