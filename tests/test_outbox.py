@@ -155,6 +155,29 @@ class TestNotificationsQueued(unittest.TestCase):
         drain(self.ob)
         self.assertFalse(os.path.exists(os.path.dirname(queued_data[0].file)))
 
+    def test_confirm_sent_is_a_reaction_not_a_reply(self):
+        msg = MagicMock(id=77, chat_id=5)
+        bot.confirm_sent(bot.dc_bot_instance, 1, msg, "yesnogame")
+        drain(self.ob)
+        bot.dc_bot_instance.rpc.send_reaction.assert_called_once_with(1, 77, ["✅\u00a0yesnogame"])
+        bot.dc_bot_instance.rpc.send_msg.assert_not_called()
+
+    def test_confirm_sent_falls_back_to_text_when_reaction_fails(self):
+        msg = MagicMock(id=77, chat_id=5)
+        bot.dc_bot_instance.rpc.send_reaction.side_effect = RuntimeError("boom")
+        bot.confirm_sent(bot.dc_bot_instance, 1, msg, "yesnogame")
+        drain(self.ob)
+        drain(self.ob)
+        text = bot.dc_bot_instance.rpc.send_msg.call_args[0][2].text
+        self.assertEqual(text, "✅ Sent to `yesnogame`")
+
+    def test_reaction_text_fits_core_limit(self):
+        for topic in ("a", "yesnogame", "x" * 100, "я" * 50, "🎯" * 20):
+            r = bot.reaction_text(topic)
+            self.assertLess(len(r.encode("utf-8")), 30)
+            self.assertEqual(len(r.split(" ")), 1)  # ASCII whitespace would cut the reaction
+            self.assertTrue(r.startswith("✅"))
+
     def test_temp_file_removed_without_subscribers(self):
         import tempfile
         f = tempfile.NamedTemporaryFile(delete=False)

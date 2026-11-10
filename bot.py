@@ -36,7 +36,7 @@ import collections
 # Initialize logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("ntfy_bot")
-VERSION = "1.6.4"
+VERSION = "1.6.5"
 # Attachments over 64 KB are not downloaded automatically. Not 1 byte: the core then also defers
 # every plain text message (commands, links) to a one-by-one "download later", which delays replies.
 DOWNLOAD_LIMIT = 65536
@@ -2236,6 +2236,36 @@ def initadmin_command(bot, accid, event):
         _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=
             f"✅ You are now the admin!\n\nEmail: `{email}`\n⚠️ Fingerprint not available yet (will be used after key exchange)."))
 
+def reaction_text(topic: str) -> str:
+    """Reaction that reads "✅ topic". The core accepts any string of under 30 bytes without ASCII
+    whitespace as a reaction, so the space is a no-break space (U+00A0) and the topic is cut to fit."""
+    text = "✅\u00a0"
+    for ch in topic:
+        if len((text + ch).encode("utf-8")) >= 30:
+            break
+        text += ch
+    return text.rstrip("\u00a0")
+
+def confirm_sent(bot, accid, msg, topic: str, details: str = "") -> None:
+    """Confirms a post to a topic with a reaction on the user's message instead of a reply.
+    Falls back to the text reply if the reaction cannot be sent."""
+    def reply():
+        text = f"✅ Sent to `{topic}`" + (f" ({details})" if details else "")
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=text))
+
+    def reacted(fut):
+        if fut.exception() is not None:
+            logger.warning(f"Reaction to message {msg.id} failed, replying instead: {fut.exception()}")
+            reply()
+
+    try:
+        fut = dc_outbox.submit(lambda: bot.rpc.send_reaction(accid, msg.id, [reaction_text(topic)]),
+                               priority=PRIO_REPLY, label=f"reaction in chat {msg.chat_id}")
+        fut.add_done_callback(reacted)
+    except Exception as e:
+        logger.warning(f"Could not queue reaction, replying instead: {e}")
+        reply()
+
 def _quote_field(quote, name):
     if isinstance(quote, dict):
         return quote.get(name) or ''
@@ -2290,7 +2320,7 @@ def on_new_message(bot, accid, event):
             reply_topic = _topic_from_quote(quote, msg.chat_id)
             if reply_topic:
                 _publish_from_chat(bot, accid, reply_topic, text, msg.chat_id)
-                _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"✅ Sent to `{reply_topic}`"))
+                confirm_sent(bot, accid, msg, reply_topic)
                 return
     except Exception as e:
         bot.logger.error(f"Error in reply-to-notification check: {e}")
@@ -2412,10 +2442,7 @@ def send_command(bot, accid, event):
         message = rest
 
     _publish_from_chat(bot, accid, topic, message, msg.chat_id, title=title)
-    confirm = f"✅ Sent to `{topic}`"
-    if title:
-        confirm += f" (title: {title})"
-    _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=confirm))
+    confirm_sent(bot, accid, msg, topic, f"title: {title}" if title else "")
 
 
 @dc_cli.on(events.NewMessage(command="/newgroup"))
