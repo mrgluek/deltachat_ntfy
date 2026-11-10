@@ -36,7 +36,7 @@ import collections
 # Initialize logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("ntfy_bot")
-VERSION = "1.6.0"
+VERSION = "1.6.1"
 # Attachments over 64 KB are not downloaded automatically. Not 1 byte: the core then also defers
 # every plain text message (commands, links) to a one-by-one "download later", which delays replies.
 DOWNLOAD_LIMIT = 65536
@@ -2196,6 +2196,29 @@ def initadmin_command(bot, accid, event):
         _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=
             f"✅ You are now the admin!\n\nEmail: `{email}`\n⚠️ Fingerprint not available yet (will be used after key exchange)."))
 
+def _quote_field(quote, name):
+    if isinstance(quote, dict):
+        return quote.get(name) or ''
+    return getattr(quote, name, '') or ''
+
+def _topic_from_quote(quote, chat_id) -> str | None:
+    """Topic of the notification that a message quotes, or None.
+
+    Private chats: the notification text starts with `[topic]`.
+    Groups: no prefix, the bot sends as "#topic" (override_sender_name), so the
+    topic comes from the quoted sender name; only if this chat is subscribed to it.
+    """
+    m = re.match(r'^`\[(.+?)\]`', _quote_field(quote, 'text'))
+    if m:
+        return m.group(1)
+    for name in ('override_sender_name', 'author_display_name'):
+        sender = _quote_field(quote, name).strip().lstrip('~').strip()
+        if sender.startswith('#') and len(sender) > 1:
+            topic = sender[1:]
+            if topic in database.get_subscriptions(chat_id):
+                return topic
+    return None
+
 @dc_cli.on(events.NewMessage)
 def on_new_message(bot, accid, event):
     msg = event.msg
@@ -2224,11 +2247,8 @@ def on_new_message(bot, accid, event):
     try:
         quote = getattr(msg, 'quote', None)
         if quote and text and not text.startswith('/'):
-            quote_text = getattr(quote, 'text', '') or ''
-            # format_notification puts `[topic]` at the start for private chats
-            topic_match = re.match(r'^`\[(.+?)\]`', quote_text)
-            if topic_match:
-                reply_topic = topic_match.group(1)
+            reply_topic = _topic_from_quote(quote, msg.chat_id)
+            if reply_topic:
                 _publish_from_chat(bot, accid, reply_topic, text, msg.chat_id)
                 _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"✅ Sent to `{reply_topic}`"))
                 return
