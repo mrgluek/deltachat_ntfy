@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.6] - 2026-11-10
+
+### Changed
+- **Reactions for subscriptions, "📋 topic" for posts**: `/sub` and a subscription by link react with "✅ topic", `/unsub` with "🔕 topic", "already subscribed" / "not subscribed" with "ℹ️ topic" instead of a text reply. A post to a topic is confirmed with "📋 topic" (was "✅ topic"). If a reaction cannot be sent, the bot replies with text as before.
+
 ## [1.6.5] - 2026-11-10
 
 ### Changed

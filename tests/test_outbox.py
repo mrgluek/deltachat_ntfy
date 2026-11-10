@@ -159,7 +159,7 @@ class TestNotificationsQueued(unittest.TestCase):
         msg = MagicMock(id=77, chat_id=5)
         bot.confirm_sent(bot.dc_bot_instance, 1, msg, "yesnogame")
         drain(self.ob)
-        bot.dc_bot_instance.rpc.send_reaction.assert_called_once_with(1, 77, ["✅\u00a0yesnogame"])
+        bot.dc_bot_instance.rpc.send_reaction.assert_called_once_with(1, 77, ["📋\u00a0yesnogame"])
         bot.dc_bot_instance.rpc.send_msg.assert_not_called()
 
     def test_confirm_sent_falls_back_to_text_when_reaction_fails(self):
@@ -176,7 +176,14 @@ class TestNotificationsQueued(unittest.TestCase):
             r = bot.reaction_text(topic)
             self.assertLess(len(r.encode("utf-8")), 30)
             self.assertEqual(len(r.split(" ")), 1)  # ASCII whitespace would cut the reaction
-            self.assertTrue(r.startswith("✅"))
+            self.assertTrue(r.startswith("📋"))
+            self.assertLess(len(bot.reaction_text(topic, "ℹ️").encode("utf-8")), 30)
+
+    def test_subscribe_confirmed_by_reaction(self):
+        msg = MagicMock(id=9, chat_id=5)
+        bot.react_or_reply(bot.dc_bot_instance, 1, msg, "🔕", "news", "text")
+        drain(self.ob)
+        bot.dc_bot_instance.rpc.send_reaction.assert_called_once_with(1, 9, ["🔕\u00a0news"])
 
     def test_temp_file_removed_without_subscribers(self):
         import tempfile
