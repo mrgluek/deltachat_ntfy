@@ -100,7 +100,7 @@ curl -H 'Click: https://github.com' -d 'Check the repo' https://ntfy.gluek.info/
 curl -H 'Attach: https://github.com/fluidicon.png' -d 'New avatar attached' https://ntfy.gluek.info/test
 
 # 5. Direct File Upload
-curl -T my_photo.jpg -H 'Filename: photo.jpg' https://ntfy.gluek.info/test
+curl -T my_photo.jpg -H 'Filename: photo.jpg' -H 'Message: Caption for the photo' https://ntfy.gluek.info/test
 
 # 6. The 'Ultimate' Test (Combined)
 curl -X POST https://ntfy.gluek.info/test \

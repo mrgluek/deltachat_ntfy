@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.4] - 2026-11-10
+
+### Fixed
+- **`Message` header is no longer ignored**: When the request body is a file (`curl -T`), the notification text now comes from the `Message` header (also `X-Message`, `Msg`, `m`) instead of the fixed "File attachment". The header also fills in the text when the body is empty.
+
 ## [1.6.3] - 2026-11-10
 
 ### Changed

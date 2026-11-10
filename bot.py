@@ -36,7 +36,7 @@ import collections
 # Initialize logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("ntfy_bot")
-VERSION = "1.6.3"
+VERSION = "1.6.4"
 # Attachments over 64 KB are not downloaded automatically. Not 1 byte: the core then also defers
 # every plain text message (commands, links) to a one-by-one "download later", which delays replies.
 DOWNLOAD_LIMIT = 65536
@@ -475,8 +475,11 @@ async def handle_ntfy_post(request):
     attach_url = request.headers.get('Attach') or request.headers.get('X-Attach', '')
     filename = request.headers.get('Filename') or request.headers.get('X-Filename') or request.headers.get('File') or request.headers.get('f', '')
     # Header values from non-UTF-8 clients arrive with surrogate escapes; fix them up.
-    topic, title, tags_raw, filename = (fix_header_text(v) if isinstance(v, str) else v
-                                         for v in (topic, title, tags_raw, filename))
+    message_header = (request.headers.get('Message') or request.headers.get('X-Message')
+                      or request.headers.get('Msg') or request.headers.get('X-Msg')
+                      or request.headers.get('m', ''))
+    topic, title, tags_raw, filename, message_header = (fix_header_text(v) if isinstance(v, str) else v
+                                         for v in (topic, title, tags_raw, filename, message_header))
     
 
     file_path = None
@@ -513,10 +516,14 @@ async def handle_ntfy_post(request):
                 f.write(body)
                 f.close()
                 file_path = f.name
-                message = "📎 File attachment" # Default message if only file is sent
+                # The body is the file, so the text comes from the Message header (ntfy protocol)
+                message = message_header or "📎 File attachment"
         else:
             message = decode_body(await request.read(), content_type)
             
+    if not message:
+        message = message_header
+
     # External attachment from URL (Step 5)
     if attach_url and not file_path:
         safe, reason = is_safe_url(attach_url)

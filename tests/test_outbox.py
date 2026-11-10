@@ -140,6 +140,21 @@ class TestNotificationsQueued(unittest.TestCase):
         self.assertEqual([c.args[2].file for c in sent], [file_path, file_path])
         self.assertFalse(os.path.exists(file_path))  # removed after the second send
 
+    def test_message_header_is_the_text_of_a_file_upload(self):
+        queued_data = []
+        real = bot.queue_notification
+
+        def spy(acc_id, chat_id, msg_data, priority, topic):
+            queued_data.append(msg_data)
+            return real(acc_id, chat_id, msg_data, priority, topic)
+        with patch.object(bot, "queue_notification", side_effect=spy):
+            self._post(b"\x89PNG fake", {"Filename": "graph.png", "Message": "Caption here"})
+        self.assertIn("Caption here", queued_data[0].text)
+        self.assertNotIn("File attachment", queued_data[0].text)
+        self.assertEqual(os.path.basename(queued_data[0].file), "graph.png")
+        drain(self.ob)
+        self.assertFalse(os.path.exists(os.path.dirname(queued_data[0].file)))
+
     def test_temp_file_removed_without_subscribers(self):
         import tempfile
         f = tempfile.NamedTemporaryFile(delete=False)
