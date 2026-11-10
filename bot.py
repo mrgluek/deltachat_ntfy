@@ -36,7 +36,7 @@ import collections
 # Initialize logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("ntfy_bot")
-VERSION = "1.6.1"
+VERSION = "1.6.2"
 # Attachments over 64 KB are not downloaded automatically. Not 1 byte: the core then also defers
 # every plain text message (commands, links) to a one-by-one "download later", which delays replies.
 DOWNLOAD_LIMIT = 65536
@@ -256,6 +256,17 @@ def queue_notification(acc_id, dc_chat_id, msg_data, priority: int, topic: str):
     return dc_outbox.submit(lambda: dc_bot_instance.rpc.send_msg(acc_id, dc_chat_id, msg_data),
                             priority=priority, label=f"#{topic} to chat {dc_chat_id}")
 
+
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff", ".avif", ".heic"}
+
+def attachment_viewtype(path: str) -> str | None:
+    """Explicit viewtype for images. Without it the core sends a .webp as a plain file."""
+    ext = os.path.splitext(path)[1].lower()
+    if ext == ".gif":
+        return "Gif"
+    if ext in IMAGE_EXTENSIONS:
+        return "Image"
+    return None
 
 def remove_file_when_sent(path: str | None, futures: list) -> None:
     """Deletes an attachment's temp file after the last queued send that uses it.
@@ -589,6 +600,7 @@ async def handle_ntfy_post(request):
                     msg_data = MsgData(text=formatted_msg)
                     if file_path:
                         msg_data.file = file_path
+                        msg_data.viewtype = attachment_viewtype(file_path)
                     
                     if not is_private:
                         msg_data.override_sender_name = f"#{topic}"

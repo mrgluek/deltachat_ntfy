@@ -67,5 +67,16 @@ class TestTopicFromQuote(unittest.TestCase):
         self.assertIsNone(bot._topic_from_quote(q, 5))
 
 
+class TestAttachmentViewtype(unittest.TestCase):
+    def test_images(self):
+        self.assertEqual(bot.attachment_viewtype("/tmp/a.webp"), "Image")
+        self.assertEqual(bot.attachment_viewtype("/tmp/a.PNG"), "Image")
+        self.assertEqual(bot.attachment_viewtype("/tmp/a.gif"), "Gif")
+
+    def test_other(self):
+        self.assertIsNone(bot.attachment_viewtype("/tmp/a.pdf"))
+        self.assertIsNone(bot.attachment_viewtype("/tmp/a"))
+
+
 if __name__ == "__main__":
     unittest.main()
