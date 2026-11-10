@@ -36,7 +36,7 @@ import collections
 # Initialize logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("ntfy_bot")
-VERSION = "1.6.2"
+VERSION = "1.6.3"
 # Attachments over 64 KB are not downloaded automatically. Not 1 byte: the core then also defers
 # every plain text message (commands, links) to a one-by-one "download later", which delays replies.
 DOWNLOAD_LIMIT = 65536
@@ -268,6 +268,28 @@ def attachment_viewtype(path: str) -> str | None:
         return "Image"
     return None
 
+def safe_attachment_name(name: str, default_ext: str = "") -> str:
+    """A file name that is safe to create in a temp dir: no path, no control characters."""
+    name = (name or "").encode("utf-8", "replace").decode("utf-8")
+    name = urllib.parse.unquote(name.replace("\\", "/").rsplit("/", 1)[-1])
+    name = "".join(c for c in name if c.isprintable() and c not in '<>:"|?*').strip()
+    if name.startswith("."):  # ".png", "..": never create a hidden file or a dot entry
+        name = "attachment" + name.rstrip(".") if name.strip(".") else ""
+    name = name.rstrip(" .")
+    root, ext = os.path.splitext(name)
+    if not root:
+        return "attachment" + (ext or default_ext)
+    if len(name.encode("utf-8")) > 120:
+        root = root.encode("utf-8")[:max(1, 120 - len(ext.encode("utf-8")))].decode("utf-8", "ignore")
+        name = root + ext
+    return name
+
+def create_attachment_file(name: str, default_ext: str = ""):
+    """Opens a new file called `name` inside a fresh temp dir (so the core and the chat show
+    the real name instead of tmpXXXX). remove_file_when_sent also removes the dir."""
+    directory = tempfile.mkdtemp(prefix="ntfy-att-")
+    return open(os.path.join(directory, safe_attachment_name(name, default_ext)), "wb")
+
 def remove_file_when_sent(path: str | None, futures: list) -> None:
     """Deletes an attachment's temp file after the last queued send that uses it.
 
@@ -280,6 +302,9 @@ def remove_file_when_sent(path: str | None, futures: list) -> None:
         try:
             if os.path.exists(path):
                 os.remove(path)
+            parent = os.path.dirname(path)
+            if os.path.basename(parent).startswith("ntfy-att-"):
+                os.rmdir(parent)
         except Exception as e:
             logger.error(f"Failed to delete temp file {path}: {e}")
 
@@ -484,8 +509,7 @@ async def handle_ntfy_post(request):
             # Direct binary body upload (Step 6)
             body = await request.read()
             if body:
-                ext = os.path.splitext(filename)[1]
-                f = tempfile.NamedTemporaryFile(delete=False, suffix=ext)
+                f = create_attachment_file(filename)
                 f.write(body)
                 f.close()
                 file_path = f.name
@@ -502,12 +526,12 @@ async def handle_ntfy_post(request):
         else:
             try:
                 parsed_url = urllib.parse.urlparse(attach_url)
-                ext = os.path.splitext(parsed_url.path)[1]
+                att_name = filename or os.path.basename(parsed_url.path)
                 timeout = aiohttp.ClientTimeout(total=15)
                 async with aiohttp.ClientSession(timeout=timeout) as session:
                     async with session.get(attach_url) as resp:
                         if resp.status == 200:
-                            f = tempfile.NamedTemporaryFile(delete=False, suffix=ext)
+                            f = create_attachment_file(att_name)
                             downloaded = 0
                             exceeded = False
                             async for chunk in resp.content.iter_chunked(65536):
@@ -519,10 +543,7 @@ async def handle_ntfy_post(request):
                                 f.write(chunk)
                             f.close()
                             if exceeded:
-                                try:
-                                    os.remove(f.name)
-                                except Exception:
-                                    pass
+                                remove_file_when_sent(f.name, [])
                             else:
                                 file_path = f.name
                         else:

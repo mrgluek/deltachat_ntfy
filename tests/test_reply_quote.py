@@ -78,5 +78,26 @@ class TestAttachmentViewtype(unittest.TestCase):
         self.assertIsNone(bot.attachment_viewtype("/tmp/a"))
 
 
+class TestAttachmentName(unittest.TestCase):
+    def test_names(self):
+        f = bot.safe_attachment_name
+        self.assertEqual(f("photo.webp"), "photo.webp")
+        self.assertEqual(f("../../etc/pass wd.png"), "pass wd.png")
+        self.assertEqual(f("C:\\dir\\a.jpg"), "a.jpg")
+        self.assertEqual(f("a%20b.png"), "a b.png")
+        self.assertEqual(f(""), "attachment")
+        self.assertEqual(f(".."), "attachment")
+        self.assertEqual(f(".png"), "attachment.png")
+        self.assertLessEqual(len(f("я" * 200 + ".jpg").encode()), 124)
+
+    def test_create_and_remove(self):
+        f = bot.create_attachment_file("Тест.webp")
+        f.write(b"x")
+        f.close()
+        self.assertEqual(os.path.basename(f.name), "Тест.webp")
+        bot.remove_file_when_sent(f.name, [])
+        self.assertFalse(os.path.exists(os.path.dirname(f.name)))
+
+
 if __name__ == "__main__":
     unittest.main()
