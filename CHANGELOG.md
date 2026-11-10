@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.1] - 2026-11-10
+
+### Fixed
+- **Replies in groups reach the topic again**: Replying to a notification in a group did nothing, because only private-chat notifications start with `[topic]`. The topic is now also taken from the quoted sender name (`#topic`), and only if the group is subscribed to it.
+
 ## [1.6.0] - 2026-10-28
 
 ### Changed
