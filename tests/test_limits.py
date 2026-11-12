@@ -56,3 +56,82 @@ class TestRateLimits(unittest.TestCase):
             for i in range(31):
                 response = asyncio.run(bot.handle_ntfy_post(request(headers={'X-Forwarded-For': f'1.1.1.{i}'})))
                 self.assertEqual(response.status, 200 if i < 30 else 429)
+
+
+class TestStreams(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        bot._rate_limits.clear()
+        bot.listeners.clear()
+        bot._stream_counts.clear()
+        bot._stream_total = 0
+        self.response = MagicMock()
+        self.response.prepare = AsyncMock()
+        self.response.write = AsyncMock()
+        self.patcher = patch('bot.web.StreamResponse', return_value=self.response)
+        self.patcher.start()
+        self.addCleanup(self.patcher.stop)
+
+    async def test_overflow_only_closes_slow_stream(self):
+        slow, fast = bot.Stream('a'), bot.Stream('b')
+        for _ in range(bot.STREAM_QUEUE_MAX):
+            bot._offer(slow, {})
+        bot._offer(slow, {'message': 'last'})
+        bot._offer(fast, {'message': 'last'})
+        self.assertTrue(slow.dropped)
+        self.assertFalse(fast.dropped)
+        self.assertEqual((await fast.q.get())['message'], 'last')
+        task = asyncio.create_task(bot.handle_ntfy_json(request()))
+        await self._registered()
+        stream = bot.listeners['limits'][0]
+        stream.dropped = True
+        stream.q.put_nowait({})
+        await task
+        self.assertIn(b'"event": "close"', self.response.write.call_args.args[0])
+        self.assertEqual(bot.listeners, {})
+        self.assertEqual(bot._stream_total, 0)
+
+    async def _registered(self):
+        for _ in range(30):
+            if bot.listeners.get('limits'):
+                return
+            await asyncio.sleep(0)
+        self.fail('stream did not register')
+
+    async def test_disconnect_releases_slot(self):
+        task = asyncio.create_task(bot.handle_ntfy_json(request()))
+        await self._registered()
+        task.cancel()
+        await task
+        self.assertEqual(bot._stream_total, 0)
+        self.assertEqual(bot._stream_counts, {})
+        self.assertEqual(bot.listeners, {})
+
+    async def test_prepare_exception_releases_slot(self):
+        self.response.prepare.side_effect = RuntimeError('broken')
+        with self.assertRaises(RuntimeError):
+            await bot.handle_ntfy_json(request())
+        self.assertEqual(bot._stream_total, 0)
+        self.assertEqual(bot._stream_counts, {})
+
+    async def test_ip_and_total_caps(self):
+        for name in ('MAX_STREAMS_PER_IP', 'MAX_STREAMS_TOTAL'):
+            with patch.object(bot, name, 0):
+                response = await bot.handle_ntfy_json(request())
+            self.assertEqual(response.status, 429)
+            self.assertEqual(response.headers['Retry-After'], '30')
+
+    async def test_poll_uses_no_slot(self):
+        with patch.object(bot, 'MAX_STREAMS_TOTAL', 0):
+            await bot.handle_ntfy_json(request(query={'poll': '1'}))
+        self.assertEqual(bot._stream_total, 0)
+        self.assertEqual(bot.listeners, {})
+
+    async def test_write_timeout_releases_slot(self):
+        self.response.write.side_effect = asyncio.TimeoutError
+        await bot.handle_ntfy_json(request())
+        self.assertEqual(bot._stream_total, 0)
+        self.assertEqual(bot.listeners, {})
+
+    async def test_push_missing_topic_does_not_create_key(self):
+        bot.push_to_listeners('absent', {})
+        self.assertEqual(bot.listeners, {})

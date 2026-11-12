@@ -68,7 +68,30 @@ _rate_last_sweep = 0.0
 TRUSTED_PROXIES = tuple(ipaddress.ip_network(value.strip()) for value in os.getenv(
     "TRUSTED_PROXIES", "127.0.0.0/8,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
 ).split(",") if value.strip())
-listeners = collections.defaultdict(list) # Pub/Sub for JSON streams
+listeners = {} # Pub/Sub for JSON streams
+STREAM_QUEUE_MAX = 100
+MAX_STREAMS_PER_IP = int(os.getenv("MAX_STREAMS_PER_IP", "10"))
+MAX_STREAMS_TOTAL = int(os.getenv("MAX_STREAMS_TOTAL", "500"))
+_stream_lock = threading.Lock()
+_stream_counts = {}
+_stream_total = 0
+
+
+class Stream:
+    def __init__(self, ip):
+        self.q = asyncio.Queue(maxsize=STREAM_QUEUE_MAX)
+        self.ip = ip
+        self.dropped = False
+
+
+def _offer(stream, payload):
+    if stream.dropped:
+        return
+    try:
+        stream.q.put_nowait(payload)
+    except asyncio.QueueFull:
+        stream.dropped = True
+
 web_server_loop = None
 
 def is_safe_url(url: str, allow_private: bool | None = None) -> tuple[bool, str]:
@@ -147,20 +170,14 @@ def is_safe_url(url: str, allow_private: bool | None = None) -> tuple[bool, str]
     return True, "OK"
 
 def push_to_listeners(topic, msg_payload):
-    logger.info(f"push_to_listeners: topic='{topic}', listeners={list(listeners.keys())}, web_server_loop={web_server_loop}")
-    if topic in listeners:
-        logger.info(f"push_to_listeners: found {len(listeners[topic])} queues for '{topic}'")
-        for q in listeners[topic]:
-            if web_server_loop:
-                try:
-                    web_server_loop.call_soon_threadsafe(q.put_nowait, msg_payload)
-                    logger.info("push_to_listeners: successfully queued event via call_soon_threadsafe")
-                except Exception as e:
-                    logger.error(f"Failed to push to listener queue: {e}")
-            else:
-                logger.warning("push_to_listeners: web_server_loop is None!")
-    else:
-        logger.info(f"push_to_listeners: no listeners subscribed to '{topic}'")
+    streams = tuple(listeners.get(topic, ()))
+    logger.debug("push_to_listeners: topic=%s streams=%d", topic, len(streams))
+    for stream in streams:
+        if web_server_loop:
+            try:
+                web_server_loop.call_soon_threadsafe(_offer, stream, msg_payload)
+            except RuntimeError:
+                logger.debug("Stream loop closed")
 
 def get_client_ip(request):
     """Trust forwarded addresses only across the configured proxy chain."""
@@ -1667,76 +1684,69 @@ async def handle_static(request):
     return web.Response(status=404)
 
 async def handle_ntfy_json(request):
-    if not check_rate_limit(request, bucket="json_stream", max_requests=60, window_seconds=60):
-        return web.Response(text="Rate limit exceeded. Try again later.", status=429, headers={"Retry-After": "60"})
-
+    global _stream_total
+    if not check_rate_limit(request, bucket="json_stream", max_requests=60):
+        return web.Response(status=429, headers={"Retry-After": "60"})
     topic = request.match_info.get('topic')
     if not valid_topic(topic):
         return web.Response(status=404)
-    since = request.query.get('since', '')
-    poll = request.query.get('poll', '0')
-    
-    response = web.StreamResponse(
-        status=200,
-        reason='OK',
-        headers={
-            'Content-Type': 'application/x-ndjson',
-            'Cache-Control': 'no-cache',
-            'Connection': 'keep-alive',
-            'Access-Control-Allow-Origin': '*'
-        }
-    )
-    await response.prepare(request)
-    
-    # Send open event
-    open_event = {
-        "id": f"ntfy-{int(time.time()*1000)}",
-        "time": int(time.time()),
-        "event": "open",
-        "topic": topic
-    }
-    await response.write(json.dumps(open_event).encode('utf-8') + b'\n')
-    
-    # Send historical messages
-    if since:
-        historical = database.get_messages_since(topic, since)
-        for row in historical:
-            msg_payload = {
-                "id": str(row['id']),
-                "time": row['created_at'],
-                "event": "message",
-                "topic": topic,
-                "message": row['message']
-            }
-            if row['title']: msg_payload["title"] = row['title']
-            if row['priority']: msg_payload["priority"] = row['priority']
-            await response.write(json.dumps(msg_payload).encode('utf-8') + b'\n')
-            
-    if poll == '1':
-        return response
-        
-    # Enter streaming loop
-    q = asyncio.Queue()
-    listeners[topic].append(q)
+    poll = request.query.get('poll') == '1'
+    ip = _ip_bucket(get_client_ip(request))
+    stream = None
+    if not poll:
+        with _stream_lock:
+            if _stream_total >= MAX_STREAMS_TOTAL or _stream_counts.get(ip, 0) >= MAX_STREAMS_PER_IP:
+                return web.Response(status=429, headers={"Retry-After": "30"})
+            _stream_total += 1
+            _stream_counts[ip] = _stream_counts.get(ip, 0) + 1
+    response = web.StreamResponse(headers={
+        'Content-Type': 'application/x-ndjson', 'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive', 'Access-Control-Allow-Origin': '*'})
+
+    async def write(payload):
+        await asyncio.wait_for(response.write(json.dumps(payload).encode('utf-8') + b'\n'), 10)
+
     try:
+        await response.prepare(request)
+        await write({"id": f"ntfy-{int(time.time()*1000)}", "time": int(time.time()),
+                     "event": "open", "topic": topic})
+        since = request.query.get('since', '')
+        if since:
+            for row in database.get_messages_since(topic, since):
+                payload = {"id": str(row['id']), "time": row['created_at'], "event": "message",
+                           "topic": topic, "message": row['message']}
+                if row['title']: payload['title'] = row['title']
+                if row['priority']: payload['priority'] = row['priority']
+                await write(payload)
+        if poll:
+            return response
+        stream = Stream(ip)
+        listeners.setdefault(topic, []).append(stream)
         while True:
+            if stream.dropped:
+                await write({"event": "close", "message": "too slow"})
+                break
             try:
-                msg = await asyncio.wait_for(q.get(), timeout=15.0)
-                await response.write(json.dumps(msg).encode('utf-8') + b'\n')
+                payload = await asyncio.wait_for(stream.q.get(), 15)
             except asyncio.TimeoutError:
-                keepalive = {
-                    "id": f"ntfy-{int(time.time()*1000)}",
-                    "time": int(time.time()),
-                    "event": "keepalive",
-                    "topic": topic
-                }
-                await response.write(json.dumps(keepalive).encode('utf-8') + b'\n')
-    except (asyncio.CancelledError, ConnectionError, aiohttp.ClientConnectionResetError):
-        pass
+                payload = {"event": "keepalive", "time": int(time.time()), "topic": topic}
+            if stream.dropped:
+                continue
+            await write(payload)
+    except (asyncio.CancelledError, ConnectionError, asyncio.TimeoutError):
+        if stream:
+            stream.dropped = True
     finally:
-        if q in listeners[topic]:
-            listeners[topic].remove(q)
-            
+        if stream:
+            listeners[topic].remove(stream)
+            if not listeners[topic]:
+                listeners.pop(topic, None)
+        if not poll:
+            with _stream_lock:
+                _stream_total -= 1
+                _stream_counts[ip] -= 1
+                if not _stream_counts[ip]:
+                    del _stream_counts[ip]
     return response
 
 async def publish_stats():
