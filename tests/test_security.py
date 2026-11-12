@@ -89,7 +89,6 @@ class TestSecurity(unittest.TestCase):
         database.init_db()
         with bot._rate_limit_lock:
             bot._rate_limits.clear()
-            bot.rate_limit_cache.clear()
 
     def tearDown(self):
         database.DB_PATH = self.orig_db_path
@@ -101,7 +100,6 @@ class TestSecurity(unittest.TestCase):
                     pass
         with bot._rate_limit_lock:
             bot._rate_limits.clear()
-            bot.rate_limit_cache.clear()
 
     def test_is_safe_url_blocks_private_and_loopback_ips(self):
         blocked = [

@@ -61,8 +61,13 @@ RATE_LIMIT_WINDOW = 60 # seconds
 RATE_LIMIT_MAX = int(os.getenv("RATE_LIMIT_MAX", "30")) # messages per minute per IP
 MAX_ATTACHMENT_BYTES = 15 * 1024 * 1024 # 15 MB max attachment file size
 _rate_limit_lock = threading.Lock()
-_rate_limits: dict[str, list[float]] = {}
-rate_limit_cache = collections.defaultdict(list) # Backward-compatible alias
+_rate_limits = collections.OrderedDict()
+MAX_RATE_KEYS = 50000
+_rate_calls = 0
+_rate_last_sweep = 0.0
+TRUSTED_PROXIES = tuple(ipaddress.ip_network(value.strip()) for value in os.getenv(
+    "TRUSTED_PROXIES", "127.0.0.0/8,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+).split(",") if value.strip())
 listeners = collections.defaultdict(list) # Pub/Sub for JSON streams
 web_server_loop = None
 
@@ -158,43 +163,74 @@ def push_to_listeners(topic, msg_payload):
         logger.info(f"push_to_listeners: no listeners subscribed to '{topic}'")
 
 def get_client_ip(request):
-    """Get real client IP, respecting X-Forwarded-For from Caddy."""
-    forwarded = request.headers.get("X-Forwarded-For")
-    if forwarded:
-        return forwarded.split(',')[0].strip()
-    return request.remote
+    """Trust forwarded addresses only across the configured proxy chain."""
+    remote = request.remote
+    try:
+        peer = ipaddress.ip_address(remote)
+        if not any(peer in network for network in TRUSTED_PROXIES):
+            return remote
+        forwarded = request.headers.get("X-Forwarded-For", "")
+        addresses = [ipaddress.ip_address(value.strip()) for value in forwarded.split(",")]
+        for address in reversed(addresses):
+            if not any(address in network for network in TRUSTED_PROXIES):
+                return str(address)
+    except (ValueError, TypeError):
+        pass
+    return remote
 
-def check_rate_limit(request, bucket: str = "default", max_requests: int = 60, window_seconds: int = 60) -> bool:
-    """In-memory sliding window rate limiter per client IP and bucket.
-    Returns True if allowed, False if limit exceeded.
-    """
-    client_ip = get_client_ip(request) or "unknown"
-    key = f"{bucket}:{client_ip}"
-    now = time.time()
+
+def _ip_bucket(ip):
+    try:
+        address = ipaddress.ip_address(ip)
+        if address.version == 6:
+            return str(ipaddress.ip_network(f"{address}/64", strict=False))
+        return str(address)
+    except (ValueError, TypeError):
+        return "unknown"
+
+
+def _sweep_rate_limits(now):
+    # Entries are ordered by their newest accepted hit, so only the idle prefix expires.
+    while _rate_limits:
+        key = next(iter(_rate_limits))
+        if _rate_limits[key] and now - _rate_limits[key][-1] < RATE_LIMIT_WINDOW:
+            break
+        del _rate_limits[key]
+
+
+def _hit(key, max_requests, window_seconds=RATE_LIMIT_WINDOW):
+    """Shared bounded sliding-window store; True means the hit was admitted."""
+    global _rate_calls, _rate_last_sweep
+    now = time.monotonic()
     with _rate_limit_lock:
-        timestamps = [t for t in _rate_limits.get(key, []) if now - t < window_seconds]
+        _rate_calls += 1
+        if _rate_calls % 256 == 0 or now - _rate_last_sweep >= 60:
+            _sweep_rate_limits(now)
+            _rate_last_sweep = now
+        timestamps = _rate_limits.get(key, collections.deque())
+        while timestamps and now - timestamps[0] >= window_seconds:
+            timestamps.popleft()
+        if not timestamps:
+            _rate_limits.pop(key, None)
         if len(timestamps) >= max_requests:
-            _rate_limits[key] = timestamps
             return False
         timestamps.append(now)
         _rate_limits[key] = timestamps
+        _rate_limits.move_to_end(key)
+        if len(_rate_limits) > MAX_RATE_KEYS:
+            _sweep_rate_limits(now)
+            while len(_rate_limits) > MAX_RATE_KEYS:
+                _rate_limits.popitem(last=False)
         return True
 
-def is_rate_limited(ip: str, max_requests: int = RATE_LIMIT_MAX, window_seconds: int = RATE_LIMIT_WINDOW) -> bool:
-    """Thread-safe rate limiter per client IP. Returns True if rate-limited."""
-    client_ip = ip or "unknown"
-    key = f"post:{client_ip}"
-    now = time.time()
-    with _rate_limit_lock:
-        timestamps = [t for t in _rate_limits.get(key, []) if now - t < window_seconds]
-        if len(timestamps) >= max_requests:
-            _rate_limits[key] = timestamps
-            rate_limit_cache[client_ip] = timestamps
-            return True
-        timestamps.append(now)
-        _rate_limits[key] = timestamps
-        rate_limit_cache[client_ip] = timestamps
-        return False
+
+def check_rate_limit(request, bucket="default", max_requests=60, window_seconds=60):
+    return _hit(f"{bucket}:{_ip_bucket(get_client_ip(request))}", max_requests, window_seconds)
+
+
+def is_rate_limited(ip, max_requests=RATE_LIMIT_MAX, window_seconds=RATE_LIMIT_WINDOW):
+    return not _hit(f"post:{_ip_bucket(ip)}", max_requests, window_seconds)
+
 def sanitize_string(s: str) -> str:
     if not isinstance(s, str):
         return s
