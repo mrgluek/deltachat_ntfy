@@ -6,6 +6,8 @@ It provides a modern web interface for each topic (e.g., `https://ntfy.gluek.inf
 
 ## Usage
 
+Topic names use 1–64 ASCII letters, digits, underscores, dots or hyphens (`[A-Za-z0-9_.-]`). This rule applies to HTTP publishing, the web UI and Delta Chat commands.
+
 Start the bot. Add it to Delta Chat. Message the bot:
 
 - `/initadmin` to claim bot ownership

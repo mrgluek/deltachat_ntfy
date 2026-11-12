@@ -17,6 +17,7 @@ main() {
 # --- HEALTHCHECKS SUPPORT ---
 # Create a .env.local file in this directory to enable monitoring:
 #   echo 'MONITOR_URL=https://ping.gluek.info/ping/YOUR-UUID' > .env.local
+# shellcheck source=/dev/null
 [ -f .env.local ] && . .env.local
 
 hc_ping() {
@@ -84,8 +85,8 @@ if [ "$LOCAL" != "$REMOTE" ] || [ "$FORCE" = true ]; then
         echo "🔄 Force update requested."
     else
         echo "🆕 Deploying $WHAT..."
-        git reset --hard "$REMOTE"
     fi
+    git reset --hard "$REMOTE"
     docker compose up -d --build
     docker image prune -f
     echo "✅ Operation completed: $(git describe --tags --always)."

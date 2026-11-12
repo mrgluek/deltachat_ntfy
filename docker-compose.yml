@@ -2,6 +2,8 @@ services:
   ntfy_bot:
     container_name: deltachat_ntfy_bot
     build: .
+    security_opt:
+      - no-new-privileges:true
     init: true
     restart: always
     logging:

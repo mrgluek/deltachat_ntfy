@@ -154,7 +154,8 @@ class TestSecurity(unittest.TestCase):
             safe, reason = bot.is_safe_url(url, allow_private=False)
             self.assertFalse(safe, f"Expected '{url}' to be rejected")
 
-    def test_is_safe_url_allows_testing_and_public_domains(self):
+    @patch("socket.getaddrinfo", return_value=[(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("8.8.8.8", 443))])
+    def test_is_safe_url_allows_testing_and_public_domains(self, mock_dns):
         allowed = [
             "http://example.com/image.png",
             "https://sub.example.com/data.txt",

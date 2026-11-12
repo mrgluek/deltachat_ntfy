@@ -12,6 +12,8 @@ import datetime
 import tempfile
 import urllib.parse
 import html
+from html import escape as html_escape
+import hmac
 import re
 
 
@@ -36,7 +38,7 @@ import collections
 # Initialize logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("ntfy_bot")
-VERSION = "1.6.6"
+VERSION = "1.6.7"
 # Attachments over 64 KB are not downloaded automatically. Not 1 byte: the core then also defers
 # every plain text message (commands, links) to a one-by-one "download later", which delays replies.
 DOWNLOAD_LIMIT = 65536
@@ -101,19 +103,12 @@ def is_safe_url(url: str, allow_private: bool | None = None) -> tuple[bool, str]
                 hostname.endswith(".home.arpa")):
             return False, f"Access to local hostname '{hostname}' is forbidden"
 
-        # RFC 2606 reserved testing domains (safe in unit test environments)
-        if (hostname.endswith(".example") or hostname.endswith(".test") or
-                hostname == "example.com" or hostname.endswith(".example.com") or
-                hostname == "remote.social" or hostname.endswith(".remote.social")):
-            return True, "OK"
-
         # If hostname is an explicit IP address
         try:
             ip_obj = ipaddress.ip_address(hostname)
             if isinstance(ip_obj, ipaddress.IPv6Address) and ip_obj.ipv4_mapped:
                 ip_obj = ip_obj.ipv4_mapped
-            if (ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local or
-                    ip_obj.is_reserved or ip_obj.is_multicast or ip_obj.is_unspecified):
+            if not ip_obj.is_global or ip_obj.is_multicast:
                 return False, f"Target IP {hostname} is in a reserved or private range"
             return True, "OK"
         except ValueError:
@@ -141,8 +136,7 @@ def is_safe_url(url: str, allow_private: bool | None = None) -> tuple[bool, str]
             if isinstance(ip_obj, ipaddress.IPv6Address) and ip_obj.ipv4_mapped:
                 ip_obj = ip_obj.ipv4_mapped
 
-            if (ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local or
-                    ip_obj.is_reserved or ip_obj.is_multicast or ip_obj.is_unspecified):
+            if not ip_obj.is_global or ip_obj.is_multicast:
                 return False, f"Target {hostname} resolved to reserved/private IP {ip_str}"
 
     return True, "OK"
@@ -271,13 +265,14 @@ def attachment_viewtype(path: str) -> str | None:
 def safe_attachment_name(name: str, default_ext: str = "") -> str:
     """A file name that is safe to create in a temp dir: no path, no control characters."""
     name = (name or "").encode("utf-8", "replace").decode("utf-8")
-    name = urllib.parse.unquote(name.replace("\\", "/").rsplit("/", 1)[-1])
-    name = "".join(c for c in name if c.isprintable() and c not in '<>:"|?*').strip()
+    name = urllib.parse.unquote(name).replace("\\", "/").rsplit("/", 1)[-1]
+    name = "".join(c for c in name if c.isprintable() and c not in '/\\<>:"|?*').strip()
     if name.startswith("."):  # ".png", "..": never create a hidden file or a dot entry
         name = "attachment" + name.rstrip(".") if name.strip(".") else ""
     name = name.rstrip(" .")
     root, ext = os.path.splitext(name)
     if not root:
+        default_ext = "".join(c for c in default_ext if c.isprintable() and c not in '/\\<>:"|?*')
         return "attachment" + (ext or default_ext)
     if len(name.encode("utf-8")) > 120:
         root = root.encode("utf-8")[:max(1, 120 - len(ext.encode("utf-8")))].decode("utf-8", "ignore")
@@ -288,7 +283,10 @@ def create_attachment_file(name: str, default_ext: str = ""):
     """Opens a new file called `name` inside a fresh temp dir (so the core and the chat show
     the real name instead of tmpXXXX). remove_file_when_sent also removes the dir."""
     directory = tempfile.mkdtemp(prefix="ntfy-att-")
-    return open(os.path.join(directory, safe_attachment_name(name, default_ext)), "wb")
+    path = os.path.realpath(os.path.join(directory, safe_attachment_name(name, default_ext)))
+    if os.path.commonpath((os.path.realpath(directory), path)) != os.path.realpath(directory):
+        path = os.path.join(directory, "attachment")
+    return open(path, "wb")
 
 def remove_file_when_sent(path: str | None, futures: list) -> None:
     """Deletes an attachment's temp file after the last queued send that uses it.
@@ -433,6 +431,10 @@ def fix_header_text(value: str) -> str:
     return decode_body(raw)
 
 
+def valid_topic(topic):
+    return isinstance(topic, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", topic) is not None
+
+
 async def handle_ntfy_post(request):
     topic = request.match_info.get('topic')
     
@@ -448,21 +450,17 @@ async def handle_ntfy_post(request):
         token_from_query = request.query.get("auth")
         token_from_header = request.headers.get("X-Auth-Token")
         
-        valid = False
-        if auth_header == f"Bearer {AUTH_TOKEN}":
-            valid = True
-        elif token_from_query == AUTH_TOKEN:
-            valid = True
-        elif token_from_header == AUTH_TOKEN:
-            valid = True
-            
+        valid = any(hmac.compare_digest(str(candidate or "").encode("utf-8"), expected.encode("utf-8"))
+                    for candidate, expected in ((auth_header, f"Bearer {AUTH_TOKEN}"),
+                                                (token_from_query, AUTH_TOKEN),
+                                                (token_from_header, AUTH_TOKEN)))
+
         if not valid:
             logger.warning(f"Unauthorized access attempt from IP {ip}")
             return web.Response(text="Unauthorized. Please provide a valid AUTH_TOKEN.", status=401)
 
     # Log incoming request for debugging
     logger.info(f"Incoming POST to {request.path}")
-    logger.info(f"Headers: {dict(request.headers)}")
     
     if not topic:
         # Fallback to headers or query params
@@ -482,6 +480,9 @@ async def handle_ntfy_post(request):
                                          for v in (topic, title, tags_raw, filename, message_header))
     
 
+    if topic is not None and not valid_topic(topic):
+        return web.Response(status=400, text="Invalid topic name")
+
     file_path = None
     message = ""
     
@@ -493,6 +494,8 @@ async def handle_ntfy_post(request):
             data = json.loads(decode_body(await request.read(), content_type))
             if not topic:
                 topic = data.get('topic')
+            if not valid_topic(topic):
+                return web.Response(status=400, text="Invalid topic name")
             message = data.get('message', '')
             title = data.get('title', title)
             priority_raw = str(data.get('priority', priority_raw))
@@ -524,9 +527,12 @@ async def handle_ntfy_post(request):
     if not message:
         message = message_header
 
+    if not valid_topic(topic):
+        return web.Response(status=400, text="Invalid topic name")
+
     # External attachment from URL (Step 5)
     if attach_url and not file_path:
-        safe, reason = is_safe_url(attach_url)
+        safe, reason = await asyncio.get_running_loop().run_in_executor(None, is_safe_url, attach_url)
         if not safe:
             logger.warning(f"Blocked unsafe attachment URL {attach_url}: {reason}")
             attach_url = ""  # Do not forward unsafe internal URL
@@ -536,7 +542,7 @@ async def handle_ntfy_post(request):
                 att_name = filename or os.path.basename(parsed_url.path)
                 timeout = aiohttp.ClientTimeout(total=15)
                 async with aiohttp.ClientSession(timeout=timeout) as session:
-                    async with session.get(attach_url) as resp:
+                    async with session.get(attach_url, allow_redirects=False) as resp:
                         if resp.status == 200:
                             f = create_attachment_file(att_name)
                             downloaded = 0
@@ -812,7 +818,7 @@ async def handle_topic_view(request):
     topic = request.match_info.get('topic')
     
     # Security: don't allow accessing hidden files or common requested files not in static list
-    if not topic or topic.startswith('.') or topic in ['favicon.ico', 'robots.txt']:
+    if not valid_topic(topic) or topic.startswith('.') or topic in ['favicon.ico', 'robots.txt']:
         return web.Response(status=404)
 
     bot_url = database.get_config("bot_url") or "https://ntfy.gluek.info"
@@ -848,7 +854,7 @@ async def handle_topic_view(request):
     html = f"""<!DOCTYPE html>
 <html>
 <head>
-    <title>Topic: {topic} - Ntfy Bot</title>
+    <title>Topic: {html_escape(topic)} - Ntfy Bot</title>
     <link rel="icon" type="image/png" href="/favicon-96x96.png" sizes="96x96" />
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <style>
@@ -1325,7 +1331,7 @@ async def handle_topic_view(request):
             if (click) payload.click = click;
             
             try {{
-                const response = await fetch('/{topic}', {{
+                const response = await fetch('/' + {json.dumps(topic)}, {{
                     method: 'POST',
                     headers: headers,
                     body: JSON.stringify(payload)
@@ -1369,12 +1375,12 @@ async def handle_topic_view(request):
                 seenIds.add(card.id.replace('notif-', ''));
             }});
 
-            const topic = '{topic}';
+            const topic = {json.dumps(topic)};
             let sinceParam = maxId > 0 ? maxId : 'all';
             
             async function connect() {{
                 try {{
-                    const response = await fetch(`/{topic}/json?since=${{sinceParam}}`);
+                    const response = await fetch(`/${{topic}}/json?since=${{sinceParam}}`);
                     if (!response.ok) throw new Error('Status ' + response.status);
                     
                     const reader = response.body.getReader();
@@ -1409,6 +1415,12 @@ async def handle_topic_view(request):
                 }}
             }}
             
+            function escapeHtml(value) {{
+                return String(value ?? '').replace(/[&<>"']/g, ch => ({{
+                    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+                }})[ch]);
+            }}
+
             function handleLiveMessage(msg) {{
                 if (seenIds.has(msg.id)) return;
                 seenIds.add(msg.id);
@@ -1429,7 +1441,7 @@ async def handle_topic_view(request):
                 card.className = 'notification-card new-card';
                 card.id = 'notif-' + msg.id;
                 
-                const priority = msg.priority || 3;
+                const priority = escapeHtml(msg.priority || 3);
                 
                 const date = new Date(msg.time * 1000);
                 const dtStr = date.getFullYear() + '-' + 
@@ -1444,7 +1456,7 @@ async def handle_topic_view(request):
                 const linkify = (text) => {{
                     if (!text) return '';
                     const urlRegex = /(\\b(https?|ftp|file):\\/\\/[-A-Z0-9+&@#\\/%?=~_|!:,.;]*[-A-Z0-9+&@#\\/%=~_|])/ig;
-                    return text.replace(urlRegex, function(url) {{
+                    return escapeHtml(text).replace(urlRegex, function(url) {{
                         return '<a href="' + url + '" target="_blank" rel="noopener noreferrer">' + url + '</a>';
                     }});
                 }};
@@ -1457,9 +1469,10 @@ async def handle_topic_view(request):
                     </div>
                     ${{msg.title ? `<span class="title">${{linkify(msg.title)}}</span>` : ''}}
                     <div class="message">${{linkify(msg.message)}}</div>
-                    <span class="copy-btn" onclick="copyNotif('${{msg.id}}')" title="Copy to clipboard">📋</span>
+                    <span class="copy-btn" data-id="${{escapeHtml(msg.id)}}" title="Copy to clipboard">📋</span>
                 `;
                 
+                card.querySelector('.copy-btn').addEventListener('click', () => copyNotif(msg.id));
                 const list = document.querySelector('.notification-list');
                 list.insertBefore(card, list.firstChild);
             }}
@@ -1504,11 +1517,11 @@ async def handle_topic_view(request):
     <div class="container">
         <div class="header">
             <div class="topic-path">
-                <a href="{bot_url}" class="home-link">{display_host}</a>/<span class="topic-name">{topic}</span>
-                <span class="copy-btn-inline" onclick="copyText('{topic_url}', this)" title="Copy URL">📋</span>
+                <a href="{bot_url}" class="home-link">{display_host}</a>/<span class="topic-name">{html_escape(topic)}</span>
+                <span class="copy-btn-inline" onclick="copyText({html_escape(json.dumps(topic_url))}, this)" title="Copy URL">📋</span>
             </div>
             <div class="actions">
-                <span class="copy-btn-inline" onclick="copyText('/sub {topic}', this)" title="Copy '/sub {topic}' command">📋</span>
+                <span class="copy-btn-inline" onclick="copyText('/sub {html_escape(topic)}', this)" title="Copy '/sub {html_escape(topic)}' command">📋</span>
                 <a href="{subscribe_link}" class="btn-subscribe">Subscribe</a>
             </div>
         </div>
@@ -1622,6 +1635,8 @@ async def handle_ntfy_json(request):
         return web.Response(text="Rate limit exceeded. Try again later.", status=429, headers={"Retry-After": "60"})
 
     topic = request.match_info.get('topic')
+    if not valid_topic(topic):
+        return web.Response(status=404)
     since = request.query.get('since', '')
     poll = request.query.get('poll', '0')
     
@@ -2122,9 +2137,8 @@ def _is_dc_admin(bot, accid, contact_id):
                     return True
             
             # If fingerprint is set but didn't match, we REJECT even if email matches (security)
-            if c_fp:
-                 bot.logger.warning(f"Admin fingerprint mismatch for {contact_id}")
-                 return False
+            bot.logger.warning(f"Admin fingerprint missing or mismatched for {contact_id}")
+            return False
         
         # 2. Check email (legacy or initial setup)
         if contact:
@@ -2308,8 +2322,8 @@ def on_new_message(bot, accid, event):
     
     if text.startswith(base_url + "/"):
         topic = text[len(base_url)+1:].strip()
-        # Basic validation: topic should not have spaces or further slashes
-        if topic and " " not in topic and "/" not in topic:
+        # Use the same topic rule as HTTP publishing and /sub
+        if valid_topic(topic):
             if database.subscribe(msg.chat_id, topic):
                 react_or_reply(bot, accid, msg, "✅", topic, f"✅ Subscribed to '{topic}' via link")
                 bot.logger.info(f"Subscribed chat {msg.chat_id} to '{topic}' via URL detection")
@@ -2428,6 +2442,9 @@ def send_command(bot, accid, event):
         return
 
     topic, rest = payload.split(" ", 1)
+    if not valid_topic(topic):
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="Invalid topic name (1–64 letters, digits, _, . or -)"))
+        return
     rest = rest.strip()
     if not rest:
         _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="Usage: /send <topic> [**title**] <message>"))
@@ -2485,11 +2502,7 @@ def donate_command(bot, accid, event):
 @dc_cli.on(events.NewMessage(command="/accounts"))
 def accounts_command(bot, accid, event):
     msg = event.msg
-    contact = bot.rpc.get_contact(accid, msg.from_id)
-    sender_email = contact.address
-    
-    admin_email = database.get_config("admin_dc_email")
-    if not admin_email or admin_email.lower() != sender_email.lower():
+    if not _is_dc_admin(bot, accid, msg.from_id):
         _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ This command is only for the administrator."))
         return
         
@@ -2540,8 +2553,8 @@ def sub_command(bot, accid, event):
     msg = event.msg
     topic = event.payload.strip()
     
-    if not topic:
-        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="Usage: /sub <topic>"))
+    if not valid_topic(topic):
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="Usage: /sub <topic> (1–64 letters, digits, _, . or -)"))
         return
         
     if database.subscribe(msg.chat_id, topic):

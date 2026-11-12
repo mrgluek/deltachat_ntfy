@@ -12,3 +12,8 @@ CHANGELOG.md
 README.md
 CONTEXT.md
 Caddyfile
+
+.env
+.env.*
+tests/
+*.md
