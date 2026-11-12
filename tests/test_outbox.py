@@ -195,3 +195,37 @@ class TestNotificationsQueued(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestOutboxLimits(unittest.TestCase):
+    def test_total_cap_and_drain(self):
+        ob = queued(burst=1000)
+        with patch.object(outbox, 'MAX_QUEUED', 3):
+            for _ in range(3):
+                ob.submit(lambda: None, priority=PRIO_NORMAL)
+            rejected = ob.submit(lambda: None, priority=PRIO_NORMAL)
+            self.assertIsInstance(rejected.exception(), outbox.OutboxFull)
+            self.assertEqual(ob.stats['rejected'], 1)
+            self.assertEqual(ob.waiting_total(), 3)
+            drain(ob)
+            self.assertFalse(ob.submit(lambda: None, priority=PRIO_NORMAL).done())
+
+    def test_priority_caps_and_replies_urgent_always_admitted(self):
+        for priority, cap in ((PRIO_NORMAL, 250), (PRIO_LOW, 100)):
+            ob = queued(burst=1000)
+            for _ in range(cap):
+                ob.submit(lambda: None, priority=priority)
+            self.assertIsInstance(ob.submit(lambda: None, priority=priority).exception(), outbox.OutboxFull)
+            with patch.object(outbox, 'MAX_QUEUED', 1):
+                for allowed in (PRIO_REPLY, PRIO_URGENT):
+                    self.assertFalse(ob.submit(lambda: None, priority=allowed).done())
+
+    def test_rejections_logged_once_per_minute(self):
+        clock = FakeClock()
+        ob = queued(clock=clock)
+        with patch.object(outbox, 'MAX_QUEUED', 0), self.assertLogs('ntfy_bot', 'WARNING') as logs:
+            for _ in range(2):
+                ob.submit(lambda: None, priority=PRIO_NORMAL)
+            clock.t += 60
+            ob.submit(lambda: None, priority=PRIO_NORMAL)
+        self.assertEqual(len(logs.output), 2)

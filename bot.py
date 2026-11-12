@@ -25,7 +25,7 @@ from deltabot_cli import BotCli
 import database
 import dc_fingerprint
 import transports_view
-from outbox import outbox as dc_outbox, PRIO_URGENT, PRIO_REPLY, PRIO_NORMAL, PRIO_LOW
+from outbox import outbox as dc_outbox, PRIO_URGENT, PRIO_REPLY, PRIO_NORMAL, PRIO_LOW, MAX_QUEUED as OUTBOX_MAX_QUEUED
 
 try:
     import qrcode
@@ -59,6 +59,38 @@ dc_accid = None
 AUTH_TOKEN = os.getenv("AUTH_TOKEN")
 RATE_LIMIT_WINDOW = 60 # seconds
 RATE_LIMIT_MAX = int(os.getenv("RATE_LIMIT_MAX", "30")) # messages per minute per IP
+TOPIC_RATE_MAX = int(os.getenv("TOPIC_RATE_MAX", "60"))
+URGENT_PER_TOPIC_PER_MIN = 5
+TEMP_ATTACH_BUDGET = 200 * 1024 * 1024
+_temp_attach_used = 0
+_temp_attach_sizes = {}
+_temp_attach_lock = threading.Lock()
+
+
+class AttachmentBudgetFull(Exception):
+    pass
+
+
+def _reserve_attachment(size):
+    global _temp_attach_used
+    with _temp_attach_lock:
+        if _temp_attach_used + size > TEMP_ATTACH_BUDGET:
+            raise AttachmentBudgetFull()
+        _temp_attach_used += size
+
+
+def _release_attachment(size):
+    global _temp_attach_used
+    with _temp_attach_lock:
+        _temp_attach_used -= size
+
+
+def backlog_status():
+    return (f"Outbox waiting: {dc_outbox.waiting()}\n"
+            f"Rejected: {dc_outbox.stats['rejected']}\n"
+            f"Temp attachments: {_temp_attach_used}/{TEMP_ATTACH_BUDGET} bytes")
+
+
 MAX_ATTACHMENT_BYTES = 15 * 1024 * 1024 # 15 MB max attachment file size
 _rate_limit_lock = threading.Lock()
 _rate_limits = collections.OrderedDict()
@@ -332,14 +364,27 @@ def safe_attachment_name(name: str, default_ext: str = "") -> str:
         name = root + ext
     return name
 
-def create_attachment_file(name: str, default_ext: str = ""):
+def create_attachment_file(name: str, default_ext: str = "", reserve_bytes: int = 0):
     """Opens a new file called `name` inside a fresh temp dir (so the core and the chat show
     the real name instead of tmpXXXX). remove_file_when_sent also removes the dir."""
-    directory = tempfile.mkdtemp(prefix="ntfy-att-")
-    path = os.path.realpath(os.path.join(directory, safe_attachment_name(name, default_ext)))
-    if os.path.commonpath((os.path.realpath(directory), path)) != os.path.realpath(directory):
-        path = os.path.join(directory, "attachment")
-    return open(path, "wb")
+    _reserve_attachment(reserve_bytes)
+    directory = None
+    try:
+        directory = tempfile.mkdtemp(prefix="ntfy-att-")
+        path = os.path.realpath(os.path.join(directory, safe_attachment_name(name, default_ext)))
+        if os.path.commonpath((os.path.realpath(directory), path)) != os.path.realpath(directory):
+            path = os.path.join(directory, "attachment")
+        f = open(path, "wb")
+        if reserve_bytes:
+            with _temp_attach_lock:
+                _temp_attach_sizes[path] = reserve_bytes
+        return f
+    except BaseException:
+        _release_attachment(reserve_bytes)
+        if directory:
+            os.rmdir(directory)
+        raise
+
 
 def remove_file_when_sent(path: str | None, futures: list) -> None:
     """Deletes an attachment's temp file after the last queued send that uses it.
@@ -350,6 +395,9 @@ def remove_file_when_sent(path: str | None, futures: list) -> None:
         return
 
     def remove():
+        with _temp_attach_lock:
+            size = _temp_attach_sizes.pop(path, 0)
+        _release_attachment(size)
         try:
             if os.path.exists(path):
                 os.remove(path)
@@ -537,6 +585,8 @@ async def handle_ntfy_post(request):
         return web.Response(status=400, text="Invalid topic name")
 
     file_path = None
+    body = b""
+    sends = []
     message = ""
     
     # Handle JSON body (Uptime Kuma uses this)
@@ -568,10 +618,6 @@ async def handle_ntfy_post(request):
             # Direct binary body upload (Step 6)
             body = await request.read()
             if body:
-                f = create_attachment_file(filename)
-                f.write(body)
-                f.close()
-                file_path = f.name
                 # The body is the file, so the text comes from the Message header (ntfy protocol)
                 message = message_header or "📎 File attachment"
         else:
@@ -583,133 +629,156 @@ async def handle_ntfy_post(request):
     if not valid_topic(topic):
         return web.Response(status=400, text="Invalid topic name")
 
-    # External attachment from URL (Step 5)
-    if attach_url and not file_path:
-        safe, reason = await asyncio.get_running_loop().run_in_executor(None, is_safe_url, attach_url)
-        if not safe:
-            logger.warning(f"Blocked unsafe attachment URL {attach_url}: {reason}")
-            attach_url = ""  # Do not forward unsafe internal URL
-        else:
-            try:
-                parsed_url = urllib.parse.urlparse(attach_url)
-                att_name = filename or os.path.basename(parsed_url.path)
-                timeout = aiohttp.ClientTimeout(total=15)
-                async with aiohttp.ClientSession(timeout=timeout) as session:
-                    async with session.get(attach_url, allow_redirects=False) as resp:
-                        if resp.status == 200:
-                            f = create_attachment_file(att_name)
-                            downloaded = 0
-                            exceeded = False
-                            async for chunk in resp.content.iter_chunked(65536):
-                                downloaded += len(chunk)
-                                if downloaded > MAX_ATTACHMENT_BYTES:
-                                    logger.warning(f"Attachment from {attach_url} exceeded max size of {MAX_ATTACHMENT_BYTES} bytes")
-                                    exceeded = True
-                                    break
-                                f.write(chunk)
-                            f.close()
-                            if exceeded:
-                                remove_file_when_sent(f.name, [])
-                            else:
-                                file_path = f.name
-                        else:
-                            logger.warning(f"Failed to download attachment from {attach_url}, status: {resp.status}")
-            except Exception as e:
-                logger.error(f"Error downloading attachment from {attach_url}: {e}")
-
-    # Sanitize all strings to prevent UnicodeEncodeError with surrogate characters
-    topic = sanitize_string(topic)
-    title = sanitize_string(title)
-    priority_raw = sanitize_string(priority_raw)
-    tags_raw = sanitize_string(tags_raw)
-    click_raw = sanitize_string(click_raw)
-    attach_url = sanitize_string(attach_url)
-    filename = sanitize_string(filename)
-    message = sanitize_string(message)
-
-    if not topic:
-        logger.warning(f"Request to {request.path} failed: Topic required")
-        return web.Response(status=400, text="Topic required. Use /{topic}, Topic header or 'topic' in JSON.")
-
-    if not message or not str(message).strip():
-        return web.Response(status=400, text="Message body required")
-
-    # Save to database
-    priority_int = parse_priority(priority_raw)
-    database.add_notification(topic, title, message, priority_int)
-
-    # Pub/Sub push
-    msg_payload = {
-        "id": f"ntfy-{int(time.time()*1000)}",
-        "time": int(time.time()),
-        "event": "message",
-        "topic": topic,
-        "message": message
-    }
-    if title: msg_payload["title"] = title
-    if priority_int: msg_payload["priority"] = priority_int
-    if tags_raw: msg_payload["tags"] = [t.strip() for t in tags_raw.split(',') if t.strip()]
-    if click_raw: msg_payload["click"] = click_raw
-    if attach_url: msg_payload["attach"] = attach_url
-    
-    push_to_listeners(topic, msg_payload)
-
-    # Broadcast to subscribers
+    if not _hit(f"topic:{topic}", TOPIC_RATE_MAX):
+        return web.Response(status=429, text="Topic rate limit exceeded", headers={"Retry-After": "60"})
     subscribers = database.get_subscribers(topic)
-    sends = []  # queued sends; the attachment's temp file is removed after the last one
-    if subscribers and dc_bot_instance and dc_accid is not None:
-        for dc_chat_id in subscribers:
-            logger.info(f"Preparing to send topic '{topic}' to chat {dc_chat_id}...")
+    if dc_outbox.waiting_total() + len(subscribers) > OUTBOX_MAX_QUEUED:
+        return web.Response(status=503, text="Notification backlog full", headers={"Retry-After": "60"})
+
+    try:
+        if body:
+            f = create_attachment_file(filename, reserve_bytes=len(body))
+            file_path = f.name
+            with f:
+                f.write(body)
+
+        # External attachment from URL (Step 5)
+        if attach_url and not file_path:
+            safe, reason = await asyncio.get_running_loop().run_in_executor(None, is_safe_url, attach_url)
+            if not safe:
+                logger.warning(f"Blocked unsafe attachment URL {attach_url}: {reason}")
+                attach_url = ""  # Do not forward unsafe internal URL
+            else:
+                try:
+                    parsed_url = urllib.parse.urlparse(attach_url)
+                    att_name = filename or os.path.basename(parsed_url.path)
+                    timeout = aiohttp.ClientTimeout(total=15)
+                    async with aiohttp.ClientSession(timeout=timeout) as session:
+                        async with session.get(attach_url, allow_redirects=False) as resp:
+                            if resp.status == 200:
+                                f = create_attachment_file(att_name, reserve_bytes=MAX_ATTACHMENT_BYTES)
+                                downloaded = 0
+                                exceeded = False
+                                try:
+                                    async for chunk in resp.content.iter_chunked(65536):
+                                        downloaded += len(chunk)
+                                        if downloaded > MAX_ATTACHMENT_BYTES:
+                                            exceeded = True
+                                            break
+                                        f.write(chunk)
+                                    if not exceeded:
+                                        with _temp_attach_lock:
+                                            _temp_attach_sizes[f.name] = downloaded
+                                        _release_attachment(MAX_ATTACHMENT_BYTES - downloaded)
+                                        file_path = f.name
+                                finally:
+                                    f.close()
+                                    if file_path != f.name:
+                                        remove_file_when_sent(f.name, [])
+                            else:
+                                logger.warning(f"Failed to download attachment from {attach_url}, status: {resp.status}")
+                except AttachmentBudgetFull:
+                    raise
+                except Exception as e:
+                    logger.error(f"Error downloading attachment from {attach_url}: {e}")
+
+        # Sanitize all strings to prevent UnicodeEncodeError with surrogate characters
+        topic = sanitize_string(topic)
+        title = sanitize_string(title)
+        priority_raw = sanitize_string(priority_raw)
+        tags_raw = sanitize_string(tags_raw)
+        click_raw = sanitize_string(click_raw)
+        attach_url = sanitize_string(attach_url)
+        filename = sanitize_string(filename)
+        message = sanitize_string(message)
+
+        if not topic:
+            logger.warning(f"Request to {request.path} failed: Topic required")
+            return web.Response(status=400, text="Topic required. Use /{topic}, Topic header or 'topic' in JSON.")
+
+        if not message or not str(message).strip():
+            return web.Response(status=400, text="Message body required")
+
+        # Save to database
+        priority_int = parse_priority(priority_raw)
+        send_priority = outbox_priority(priority_int)
+        if priority_int >= 4 and not AUTH_TOKEN and not _hit(f"urgent:{topic}", URGENT_PER_TOPIC_PER_MIN):
+            send_priority = PRIO_NORMAL
+        database.add_notification(topic, title, message, priority_int)
+
+        # Pub/Sub push
+        msg_payload = {
+            "id": f"ntfy-{int(time.time()*1000)}",
+            "time": int(time.time()),
+            "event": "message",
+            "topic": topic,
+            "message": message
+        }
+        if title: msg_payload["title"] = title
+        if priority_int: msg_payload["priority"] = priority_int
+        if tags_raw: msg_payload["tags"] = [t.strip() for t in tags_raw.split(',') if t.strip()]
+        if click_raw: msg_payload["click"] = click_raw
+        if attach_url: msg_payload["attach"] = attach_url
+    
+        push_to_listeners(topic, msg_payload)
+
+        # Broadcast to subscribers
+        if subscribers and dc_bot_instance and dc_accid is not None:
+            for dc_chat_id in subscribers:
+                logger.info(f"Preparing to send topic '{topic}' to chat {dc_chat_id}...")
             
-            success = False
-            for acc_id in dc_bot_instance.rpc.get_all_account_ids():
-                is_private = True
-                try:
-                    chat_info = dc_bot_instance.rpc.get_basic_chat_info(acc_id, dc_chat_id)
-                    if isinstance(chat_info, dict):
-                        if "chat_type" in chat_info:
-                            is_private = (chat_info["chat_type"] == "Single")
+                success = False
+                for acc_id in dc_bot_instance.rpc.get_all_account_ids():
+                    is_private = True
+                    try:
+                        chat_info = dc_bot_instance.rpc.get_basic_chat_info(acc_id, dc_chat_id)
+                        if isinstance(chat_info, dict):
+                            if "chat_type" in chat_info:
+                                is_private = (chat_info["chat_type"] == "Single")
+                            else:
+                                is_private = (chat_info.get("type", 1) == 1)
                         else:
-                            is_private = (chat_info.get("type", 1) == 1)
-                    else:
-                        if hasattr(chat_info, "chat_type"):
-                            is_private = (chat_info.chat_type == "Single")
-                        else:
-                            is_private = (getattr(chat_info, "type", 1) == 1)
-                    logger.info(f"Chat {dc_chat_id} found on account {acc_id}, is_private: {is_private}")
-                except Exception as e:
-                    # This exception means the chat doesn't exist on this account, try next account
-                    continue
+                            if hasattr(chat_info, "chat_type"):
+                                is_private = (chat_info.chat_type == "Single")
+                            else:
+                                is_private = (getattr(chat_info, "type", 1) == 1)
+                        logger.info(f"Chat {dc_chat_id} found on account {acc_id}, is_private: {is_private}")
+                    except Exception as e:
+                        # This exception means the chat doesn't exist on this account, try next account
+                        continue
 
-                try:
-                    formatted_msg = format_notification(title, message, priority_raw, tags_raw, click_raw, topic, is_private)
+                    try:
+                        formatted_msg = format_notification(title, message, priority_raw, tags_raw, click_raw, topic, is_private)
                     
-                    msg_data = MsgData(text=formatted_msg)
-                    if file_path:
-                        msg_data.file = file_path
-                        msg_data.viewtype = attachment_viewtype(file_path)
+                        msg_data = MsgData(text=formatted_msg)
+                        if file_path:
+                            msg_data.file = file_path
+                            msg_data.viewtype = attachment_viewtype(file_path)
                     
-                    if not is_private:
-                        msg_data.override_sender_name = f"#{topic}"
+                        if not is_private:
+                            msg_data.override_sender_name = f"#{topic}"
                     
-                    sends.append(queue_notification(acc_id, dc_chat_id, msg_data, outbox_priority(priority_int), topic))
-                    logger.info(f"Queued topic '{topic}' for chat {dc_chat_id} on account {acc_id}")
-                    success = True
-                    break # Break out of account loop, we found it!
-                except Exception as e:
-                    logger.error(f"Failed to send to {dc_chat_id} on account {acc_id}: {e}")
-                    # Even if send_msg fails, we found the right account but something else broke.
-                    # We log it and break out of the account loop.
-                    with open("data/debug.log", "a") as f:
-                        f.write(f"Failed to send to {dc_chat_id} on account {acc_id}: {e}\n")
-                    break
+                        sends.append(queue_notification(acc_id, dc_chat_id, msg_data, send_priority, topic))
+                        logger.info(f"Queued topic '{topic}' for chat {dc_chat_id} on account {acc_id}")
+                        success = True
+                        break # Break out of account loop, we found it!
+                    except Exception as e:
+                        logger.error(f"Failed to send to {dc_chat_id} on account {acc_id}: {e}")
+                        # Even if send_msg fails, we found the right account but something else broke.
+                        # We log it and break out of the account loop.
+                        with open("data/debug.log", "a") as f:
+                            f.write(f"Failed to send to {dc_chat_id} on account {acc_id}: {e}\n")
+                        break
 
-            if not success:
-                logger.warning(f"Could not find chat {dc_chat_id} on any configured account.")
+                if not success:
+                    logger.warning(f"Could not find chat {dc_chat_id} on any configured account.")
 
-    remove_file_when_sent(file_path, sends)
 
-    return web.json_response({"id": "ntfy-compat", "time": int(time.time()), "event": "message", "topic": topic, "message": message})
+        return web.json_response({"id": "ntfy-compat", "time": int(time.time()), "event": "message", "topic": topic, "message": message})
+    except AttachmentBudgetFull:
+        return web.Response(status=503, text="Attachment disk budget full", headers={"Retry-After": "60"})
+    finally:
+        remove_file_when_sent(file_path, sends)
 
 async def handle_index(request):
     if not check_rate_limit(request, bucket="web_view", max_requests=120, window_seconds=60):
@@ -1758,7 +1827,7 @@ async def publish_stats():
     
     last_24h = database.get_notifications_last_24h()
     
-    message = f"📊 Ntfy Bot Statistics\n\nNotifications received in the last 24h: {last_24h}"
+    message = f"📊 Ntfy Bot Statistics\n\nNotifications received in the last 24h: {last_24h}\n\n{backlog_status()}"
     
     # Save to database
     database.add_notification(topic, title, message, priority_int)
@@ -2383,8 +2452,8 @@ def on_new_message(bot, accid, event):
         if quote and text and not text.startswith('/'):
             reply_topic = _topic_from_quote(quote, msg.chat_id)
             if reply_topic:
-                _publish_from_chat(bot, accid, reply_topic, text, msg.chat_id)
-                confirm_sent(bot, accid, msg, reply_topic)
+                if _publish_from_chat(bot, accid, reply_topic, text, msg.chat_id) is not False:
+                    confirm_sent(bot, accid, msg, reply_topic)
                 return
     except Exception as e:
         bot.logger.error(f"Error in reply-to-notification check: {e}")
@@ -2414,6 +2483,9 @@ def _publish_from_chat(bot, accid, topic, message, sender_chat_id, title=""):
     """Publish a message to a topic from a Delta Chat command/reply.
     Saves to DB, pushes to Pub/Sub listeners, and broadcasts to all subscribers.
     """
+    if not _hit(f"topic:{topic}", TOPIC_RATE_MAX):
+        _dc_send_msg_with_stats(bot, accid, sender_chat_id, MsgData(text="Topic rate limit exceeded. Try again later."))
+        return False
     priority_int = 3
     priority_raw = "3"
     tags_raw = ""
@@ -2508,8 +2580,8 @@ def send_command(bot, accid, event):
     else:
         message = rest
 
-    _publish_from_chat(bot, accid, topic, message, msg.chat_id, title=title)
-    confirm_sent(bot, accid, msg, topic, f"title: {title}" if title else "")
+    if _publish_from_chat(bot, accid, topic, message, msg.chat_id, title=title) is not False:
+        confirm_sent(bot, accid, msg, topic, f"title: {title}" if title else "")
 
 
 @dc_cli.on(events.NewMessage(command="/newgroup"))
@@ -2703,6 +2775,8 @@ def stats_command(bot, accid, event):
     last_24h = database.get_notifications_last_24h()
     
     reply = f"📊 **Ntfy Bot Statistics**\n\nNotifications received in the last 24h: {last_24h}"
+    if _is_dc_admin(bot, accid, msg.from_id):
+        reply += "\n\n" + backlog_status()
     _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=reply))
 
 @dc_cli.on(events.NewMessage(command="/url"))

@@ -135,3 +135,130 @@ class TestStreams(unittest.IsolatedAsyncioTestCase):
     async def test_push_missing_topic_does_not_create_key(self):
         bot.push_to_listeners('absent', {})
         self.assertEqual(bot.listeners, {})
+
+
+class TestPublisherLimits(unittest.TestCase):
+    def setUp(self):
+        from test_outbox import queued
+        self.ob = queued(burst=1000)
+        bot._rate_limits.clear()
+        self.patchers = [patch.object(bot, 'dc_outbox', self.ob),
+                         patch.object(bot, 'dc_bot_instance', MagicMock()),
+                         patch.object(bot, 'dc_accid', 1),
+                         patch.object(bot, 'AUTH_TOKEN', None),
+                         patch('bot.database.add_notification'),
+                         patch('bot.database.get_subscribers', return_value=[1, 2])]
+        for patcher in self.patchers:
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.addCleanup(bot._rate_limits.clear)
+        bot.dc_bot_instance.rpc.get_all_account_ids.return_value = [1]
+        bot.dc_bot_instance.rpc.get_basic_chat_info.return_value = {'chat_type': 'Group'}
+
+    def post(self, headers=None, remote='203.0.113.1'):
+        return asyncio.run(bot.handle_ntfy_post(request(remote, headers)))
+
+    def test_backlog_rejected_before_file_creation(self):
+        with patch.object(bot, 'OUTBOX_MAX_QUEUED', 1), patch('bot.create_attachment_file') as create:
+            response = self.post({'Filename': 'a.png'})
+        self.assertEqual(response.status, 503)
+        self.assertEqual(response.headers['Retry-After'], '60')
+        create.assert_not_called()
+        self.assertEqual(self.ob.waiting_total(), 0)
+
+    def test_topic_limit_across_ips_and_chat_send(self):
+        with patch.object(bot, 'TOPIC_RATE_MAX', 2):
+            self.assertEqual(self.post().status, 200)
+            b = MagicMock()
+            event = MagicMock(payload='limits from chat')
+            event.msg.text = '/send limits from chat'
+            with patch('bot._dc_send_msg_with_stats'):
+                bot.send_command(b, 1, event)
+            self.assertEqual(self.post(remote='203.0.113.2').status, 429)
+            self.assertEqual(bot.database.add_notification.call_count, 2)
+
+    def test_anonymous_urgent_demoted_after_five_and_resets(self):
+        with patch('bot.time.monotonic', return_value=100):
+            for _ in range(6):
+                self.assertEqual(self.post({'Priority': '5'}).status, 200)
+        self.assertEqual(self.ob.waiting(), {'urgent': 10, 'normal': 2})
+        with patch('bot.time.monotonic', return_value=161):
+            self.assertEqual(self.post({'Priority': '5'}).status, 200)
+        self.assertEqual(self.ob.waiting()['urgent'], 12)
+        self.assertEqual(bot.database.add_notification.call_args.args[-1], 5)
+
+    def test_authenticated_urgent_not_demoted(self):
+        with patch.object(bot, 'AUTH_TOKEN', 'secret'):
+            for _ in range(6):
+                self.assertEqual(self.post({'Priority': '5', 'X-Auth-Token': 'secret'}).status, 200)
+        self.assertEqual(self.ob.waiting(), {'urgent': 12})
+
+    def test_budget_refused_before_file_creation(self):
+        with patch.object(bot, 'TEMP_ATTACH_BUDGET', 1), patch('bot.tempfile.mkdtemp') as mkdir:
+            self.assertEqual(self.post({'Filename': 'a.png'}).status, 503)
+        mkdir.assert_not_called()
+        self.assertEqual(bot._temp_attach_used, 0)
+
+    def test_budget_released_after_last_send_even_when_send_fails(self):
+        from test_outbox import drain
+        self.assertEqual(self.post({'Filename': 'a.png'}).status, 200)
+        self.assertEqual(bot._temp_attach_used, 5)
+        bot.dc_bot_instance.rpc.send_msg.side_effect = RuntimeError('send failed')
+        drain(self.ob)
+        self.assertEqual(bot._temp_attach_used, 0)
+
+    def test_download_failure_closes_file_removes_directory_and_releases_budget(self):
+        import os
+        files = []
+        original = bot.create_attachment_file
+
+        def capture(*args, **kwargs):
+            f = original(*args, **kwargs)
+            files.append(f)
+            return f
+
+        async def chunks(_):
+            yield b'partial'
+            raise RuntimeError('download failed')
+
+        response = MagicMock(status=200)
+        response.content.iter_chunked = chunks
+        session = MagicMock()
+        session.get.return_value.__aenter__ = AsyncMock(return_value=response)
+        client = MagicMock()
+        client.__aenter__ = AsyncMock(return_value=session)
+        with patch('bot.aiohttp.ClientSession', return_value=client), patch('bot.is_safe_url', return_value=(True, 'OK')), patch('bot.create_attachment_file', side_effect=capture):
+            self.assertEqual(self.post({'Attach': 'https://example.com/a'}).status, 200)
+        self.assertTrue(files[0].closed)
+        self.assertFalse(os.path.exists(os.path.dirname(files[0].name)))
+        self.assertEqual(bot._temp_attach_used, 0)
+
+    def test_admin_and_daily_stats_include_backlog_and_budget(self):
+        with patch('bot._is_dc_admin', return_value=True), patch('bot.database.get_notifications_last_24h', return_value=0), patch('bot._dc_send_msg_with_stats') as send:
+            bot.stats_command(MagicMock(), 1, MagicMock())
+            text = send.call_args.args[3].text
+            self.assertIn('Rejected:', text)
+            self.assertIn('Temp attachments:', text)
+            asyncio.run(bot.publish_stats())
+        self.assertIn('Rejected:', bot.database.add_notification.call_args.args[2])
+
+    def test_budget_released_after_successful_sends(self):
+        from test_outbox import drain
+        self.assertEqual(self.post({'Filename': 'ok.png'}).status, 200)
+        self.assertEqual(bot._temp_attach_used, 5)
+        drain(self.ob)
+        self.assertEqual(bot._temp_attach_used, 0)
+
+    def test_fanout_exception_cleans_attachment(self):
+        bot.dc_bot_instance.rpc.get_all_account_ids.side_effect = RuntimeError('rpc broken')
+        with self.assertRaises(RuntimeError):
+            self.post({'Filename': 'ok.png'})
+        self.assertEqual(bot._temp_attach_used, 0)
+
+    def test_chat_rejection_does_not_confirm_publication(self):
+        event = MagicMock(payload='limits message')
+        with patch.object(bot, 'TOPIC_RATE_MAX', 1), patch('bot.confirm_sent') as confirm, patch('bot._dc_send_msg_with_stats'):
+            self.assertEqual(self.post().status, 200)
+            bot.send_command(MagicMock(), 1, event)
+        confirm.assert_not_called()
+        self.assertEqual(bot.database.add_notification.call_count, 1)

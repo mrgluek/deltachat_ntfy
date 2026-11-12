@@ -23,6 +23,7 @@ import concurrent.futures
 import heapq
 import itertools
 import logging
+import os
 import threading
 import time
 
@@ -32,6 +33,7 @@ RATE_PER_MINUTE = 50
 BURST = 5
 
 BACKLOG_WARN = 20
+MAX_QUEUED = int(os.getenv("OUTBOX_MAX_QUEUED", "300"))
 
 PRIO_URGENT = 0  # notifications with ntfy priority 4-5
 PRIO_REPLY = 1   # command replies
@@ -39,6 +41,10 @@ PRIO_NORMAL = 2  # notifications with priority 3 (the default)
 PRIO_LOW = 3     # notifications with priority 1-2, daily stats
 
 PRIO_NAMES = {PRIO_URGENT: "urgent", PRIO_REPLY: "reply", PRIO_NORMAL: "normal", PRIO_LOW: "low"}
+
+
+class OutboxFull(Exception):
+    """The waiting notification backlog is full."""
 
 
 class _Job:
@@ -64,7 +70,7 @@ class Outbox:
         self._cond = threading.Condition()
         self._thread = None
         self._last_backlog_log = float("-inf")
-        self.stats = {"sent": 0, "merged": 0, "expired": 0, "failed": 0}
+        self.stats = {"sent": 0, "merged": 0, "expired": 0, "failed": 0, "rejected": 0}
 
     # ---- submitting ----------------------------------------------------------
 
@@ -90,6 +96,17 @@ class Outbox:
                     job.future = old.future
                     self._push(job)
                 return old.future
+            waiting = [j for _, _, j in self._heap if not j.done]
+            class_cap = {PRIO_NORMAL: 250, PRIO_LOW: 100}.get(priority)
+            if class_cap is not None and (len(waiting) >= MAX_QUEUED or
+                    sum(j.priority == priority for j in waiting) >= class_cap):
+                future = concurrent.futures.Future()
+                future.set_exception(OutboxFull("Notification backlog full"))
+                self.stats["rejected"] += 1
+                if now - self._last_backlog_log >= 60:
+                    self._last_backlog_log = now
+                    logger.warning("Outbox: notification backlog full; rejecting jobs")
+                return future
             job = _Job(priority, next(self._seq), fn, key, expires_at, label)
             self._push(job)
             return job.future
@@ -169,6 +186,10 @@ class Outbox:
             job.future.set_exception(e)
 
     # ---- status --------------------------------------------------------------
+
+    def waiting_total(self):
+        with self._cond:
+            return sum(not job.done for _, _, job in self._heap)
 
     def waiting(self) -> dict:
         """Jobs waiting, by priority name."""
