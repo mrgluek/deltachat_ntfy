@@ -1827,7 +1827,7 @@ async def publish_stats():
     
     last_24h = database.get_notifications_last_24h()
     
-    message = f"📊 Ntfy Bot Statistics\n\nNotifications received in the last 24h: {last_24h}\n\n{backlog_status()}"
+    message = f"📊 Ntfy Bot Statistics\n\nNotifications received in the last 24h: {last_24h}"
     
     # Save to database
     database.add_notification(topic, title, message, priority_int)

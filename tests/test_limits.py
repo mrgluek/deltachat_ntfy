@@ -233,14 +233,16 @@ class TestPublisherLimits(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.dirname(files[0].name)))
         self.assertEqual(bot._temp_attach_used, 0)
 
-    def test_admin_and_daily_stats_include_backlog_and_budget(self):
+    def test_admin_stats_include_backlog_but_public_daily_stats_do_not(self):
         with patch('bot._is_dc_admin', return_value=True), patch('bot.database.get_notifications_last_24h', return_value=0), patch('bot._dc_send_msg_with_stats') as send:
             bot.stats_command(MagicMock(), 1, MagicMock())
             text = send.call_args.args[3].text
             self.assertIn('Rejected:', text)
             self.assertIn('Temp attachments:', text)
             asyncio.run(bot.publish_stats())
-        self.assertIn('Rejected:', bot.database.add_notification.call_args.args[2])
+        public = bot.database.add_notification.call_args.args[2]
+        self.assertNotIn('Rejected:', public)
+        self.assertNotIn('Temp attachments:', public)
 
     def test_budget_released_after_successful_sends(self):
         from test_outbox import drain
