@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.8] - 2026-11-12 (Limits)
+
+### Changed
+- Validate proxy chains with `TRUSTED_PROXIES`, group IPv6 clients by /64, and bound rate-limit memory while keeping `RATE_LIMIT_MAX` at 30/minute.
+- Bound stream queues and write times, clean up listeners, and cap open streams with `MAX_STREAMS_PER_IP` and `MAX_STREAMS_TOTAL`.
+- Cap the outbox with `OUTBOX_MAX_QUEUED`, share `TOPIC_RATE_MAX` across HTTP and chat, demote anonymous urgent posts after five/minute, and bound temporary attachments to 200 MB with usage and rejections in stats.
+- Document limits and add a container process limit of 256.
+
 ## [1.6.7] - 2026-11-12
 
 ### Security

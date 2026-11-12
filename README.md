@@ -156,6 +156,23 @@ You can also manage transports directly in Delta Chat using `/addtransport` and 
 | `PORT` | Web server port for HTTP API and web dashboard. | `8080` |
 | `DB_PATH` | Path to SQLite database file. | `ntfy.db` |
 
+### Limits
+
+| Environment variable | Limit | Default |
+| --- | --- | --- |
+| `TRUSTED_PROXIES` | Peers allowed to supply `X-Forwarded-For`; walk the chain from the right to the first untrusted IP | `127.0.0.0/8,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16` |
+| `RATE_LIMIT_MAX` | HTTP publications per client IP per minute | `30` |
+| `TOPIC_RATE_MAX` | Publications per topic per minute, shared by HTTP, `/send` and quote replies | `60` |
+| `MAX_STREAMS_PER_IP` | Open JSON streams per client IP | `10` |
+| `MAX_STREAMS_TOTAL` | Open JSON streams across all clients | `500` |
+| `OUTBOX_MAX_QUEUED` | Waiting notification jobs; HTTP fan-out exceeding this backlog returns 503 | `300` |
+
+IPv6 clients share a /64 bucket. Rate-limit memory is capped at 50,000 keys. Web views allow 120 requests/minute and JSON endpoints allow 60 connection attempts/minute per IP; `poll=1` uses no open-stream slot. Each stream buffers at most 100 events; a full queue sends a close event, and a write taking over 10 seconds ends the stream.
+
+Normal and low-priority outbox jobs also have caps of 250 and 100 respectively. Command replies and urgent jobs remain admissible. Anonymous priority 4–5 notifications above five per topic per minute are delivered at normal queue priority while retaining their displayed priority; a valid `AUTH_TOKEN` exempts publishers from demotion. Temporary attachments share a 200 MB disk budget and are removed after their last send, including failed sends. Overloaded publications return 503 with `Retry-After: 60`; open-stream limits return 429 with `Retry-After: 30`.
+
+Caddy must not be given `trusted_proxies` unless the bot's `TRUSTED_PROXIES` matches that proxy chain. Untrusted peers' forwarded headers are ignored. Set these variables in the bot process or container environment; Docker Compose users can add them through a local override file.
+
 ## Running the Bot
 
 ### Using Docker (Recommended)

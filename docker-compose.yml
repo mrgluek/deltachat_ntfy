@@ -24,6 +24,7 @@ services:
     deploy:
       resources:
         limits:
+          pids: 256
           cpus: '2'
           memory: 2G
   # caddy:
