@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.6.9] - 2026-11-23
+
+### Fixed
+- Stop minting a new Delta Chat invite token on every admin check and every topic page request. The core never prunes these tokens (other bots measured about 50,000 a day). The bot's own fingerprint is now read once per account and process (`dc_fingerprint.py`, failures are not cached), and the topic page reuses the invite link the index page already caches in `bot_qr_cache`.
+- Measured with a fake RPC (`tests/test_fingerprint_cache.py`): 1,000 admin checks went from 1,000 `get_chat_securejoin_qr_code` calls to 1; 1,000 topic page requests went from 1,000 calls to 1.
+
 ## [1.6.8] - 2026-11-12 (Limits)
 
 ### Changed

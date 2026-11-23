@@ -38,7 +38,7 @@ import collections
 # Initialize logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("ntfy_bot")
-VERSION = "1.6.8"
+VERSION = "1.6.9"
 # Attachments over 64 KB are not downloaded automatically. Not 1 byte: the core then also defers
 # every plain text message (commands, links) to a one-by-one "download later", which delays replies.
 DOWNLOAD_LIMIT = 65536
@@ -950,9 +950,14 @@ async def handle_topic_view(request):
     subscribe_link = "#"
     if dc_bot_instance and dc_accid is not None:
         try:
-            subscribe_link = dc_bot_instance.rpc.get_chat_securejoin_qr_code(dc_accid, None)
-        except:
-            pass
+            subscribe_link = bot_qr_cache.get(dc_accid)
+            if not subscribe_link:
+                subscribe_link = dc_bot_instance.rpc.get_chat_securejoin_qr_code(dc_accid, None)
+                if subscribe_link:
+                    bot_qr_cache[dc_accid] = subscribe_link
+            subscribe_link = subscribe_link or "#"
+        except Exception:
+            subscribe_link = "#"
     
     # URL parts for display
     parsed_url = urllib.parse.urlparse(bot_url)
