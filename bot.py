@@ -2671,9 +2671,20 @@ def parse_newchannel_args(payload: str):
     return name, (args[1] if len(args) == 2 else None)
 
 
-def channel_owner(accid, contact_id) -> str:
-    """Contact ids are per bot account, so the owner key includes the account."""
-    return f"{accid}:{contact_id}"
+NO_FINGERPRINT_TEXT = "❌ Cannot read your key fingerprint, write to me once more in a private chat."
+
+
+def channel_owner(bot, accid, contact_id) -> str | None:
+    """Owner key of a channel: the sender's key fingerprint (uppercase hex, no colons or spaces),
+    the same person on every bot account. None if there is no single readable key; callers
+    refuse then and never fall back to the contact id or address. One RPC per command."""
+    fp = _get_contact_fingerprint(bot, accid, contact_id)
+    if not isinstance(fp, str):
+        return None
+    fp = fp.replace(":", "").replace(" ", "").strip().upper()
+    if not re.fullmatch(r"[0-9A-F]{32,64}", fp):  # also rejects a comma-separated list
+        return None
+    return fp
 
 
 def random_channel_topic() -> str:
@@ -2712,7 +2723,10 @@ def newchannel_command(bot, accid, event):
         return
     name, topic = parsed
 
-    owner = channel_owner(accid, msg.from_id)
+    owner = channel_owner(bot, accid, msg.from_id)
+    if not owner:
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=NO_FINGERPRINT_TEXT))
+        return
     if (database.count_channels_by_owner(owner) >= CHANNELS_MAX_PER_USER
             and not _is_dc_admin(bot, accid, msg.from_id)):
         _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=
@@ -2778,7 +2792,11 @@ def ntfychannels_command(bot, accid, event):
     if not _is_private_chat(bot, accid, msg.chat_id):
         _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ /ntfychannels only works in a private chat with the bot."))
         return
-    channels = database.get_channels_by_owner(channel_owner(accid, msg.from_id))
+    owner = channel_owner(bot, accid, msg.from_id)
+    if not owner:
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=NO_FINGERPRINT_TEXT))
+        return
+    channels = database.get_channels_by_owner(owner)
     if not channels:
         _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text='You have no channels. Create one with /newchannel "name" [topic].'))
         return
@@ -2796,12 +2814,15 @@ def ntfychanneldel_command(bot, accid, event):
     if not valid_topic(topic):
         _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="Usage: /ntfychanneldel <topic>"))
         return
-    if not _hit(f"ntfychanneldel:{channel_owner(accid, msg.from_id)}", 10):
+    owner = channel_owner(bot, accid, msg.from_id)
+    # Without a fingerprint nobody owns anything; the rate key then falls back to the contact.
+    if not _hit(f"ntfychanneldel:{owner or f'contact:{accid}:{msg.from_id}'}", 10):
         _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Too many requests. Try again in a minute."))
         return
     channel = database.get_channel_by_topic(topic)
     # Same reply for a missing topic and someone else's channel: no probing which topics exist.
-    if not channel or (channel["owner"] != channel_owner(accid, msg.from_id)
+    # An old-format owner value simply never matches a fingerprint.
+    if not channel or ((not owner or channel["owner"] != owner)
                        and not _is_dc_admin(bot, accid, msg.from_id)):
         _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Channel not found or not yours."))
         return

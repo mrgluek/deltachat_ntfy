@@ -173,19 +173,38 @@ def reply_text(b):
     return b.rpc.send_msg.call_args[0][2].text
 
 
-class TestNewChannelCommand(DbCase):
+FP_A = "AB12" * 10   # contact 7 (on account 1), and the same person elsewhere
+FP_B = "CD34" * 10   # contact 8
+FP_C = "EF56" * 10   # contact 9
+
+
+class FingerprintCase(DbCase):
+    """Patches the fingerprint helper: by default contact 7 -> FP_A, 8 -> FP_B, 9 -> FP_C on any
+    account; self.fps[(accid, contact_id)] overrides (None = no readable key)."""
     def setUp(self):
         super().setUp()
+        self.fps = {}
+        defaults = {7: FP_A, 8: FP_B, 9: FP_C}
+
+        def fake_fp(_bot, accid, contact_id, contact=None):
+            return self.fps.get((accid, contact_id), defaults.get(contact_id))
+
+        p = patch("bot._get_contact_fingerprint", side_effect=fake_fp)
+        self.get_fp = p.start()
+        self.addCleanup(p.stop)
         p = patch("bot._is_dc_admin", return_value=False)
         self.is_admin = p.start()
         self.addCleanup(p.stop)
+
+
+class TestNewChannelCommand(FingerprintCase):
 
     def test_create_with_random_topic(self):
         b = make_bot()
         bot.newchannel_command(b, 1, make_event('"My Alerts"'))
         b.rpc.create_broadcast.assert_called_once_with(1, "My Alerts")
         b.rpc.get_chat_securejoin_qr_code.assert_called_once_with(1, 42)
-        ch = database.get_channels_by_owner("1:7")[0]
+        ch = database.get_channels_by_owner(FP_A)[0]
         self.assertRegex(ch["topic"], r"^[A-Za-z0-9]{12}$")
         self.assertEqual(database.get_subscribers(ch["topic"]), [42])
         text = reply_text(b)
@@ -243,7 +262,7 @@ class TestNewChannelCommand(DbCase):
 
     def test_limit_per_user(self):
         for i in range(bot.CHANNELS_MAX_PER_USER):
-            database.add_channel(1000 + i, f"t{i}", "T", "1:7", 1, "x")
+            database.add_channel(1000 + i, f"t{i}", "T", FP_A, 1, "x")
         b = make_bot()
         bot.newchannel_command(b, 1, make_event('"One more"'))
         b.rpc.create_broadcast.assert_not_called()
@@ -251,12 +270,12 @@ class TestNewChannelCommand(DbCase):
 
     def test_admin_has_no_limit(self):
         for i in range(bot.CHANNELS_MAX_PER_USER):
-            database.add_channel(1000 + i, f"t{i}", "T", "1:7", 1, "x")
+            database.add_channel(1000 + i, f"t{i}", "T", FP_A, 1, "x")
         self.is_admin.return_value = True
         b = make_bot()
         bot.newchannel_command(b, 1, make_event('"One more"'))
         b.rpc.create_broadcast.assert_called_once()
-        self.assertEqual(database.count_channels_by_owner("1:7"), bot.CHANNELS_MAX_PER_USER + 1)
+        self.assertEqual(database.count_channels_by_owner(FP_A), bot.CHANNELS_MAX_PER_USER + 1)
 
     def test_creation_rate_limited(self):
         b = make_bot()
@@ -270,7 +289,7 @@ class TestNewChannelCommand(DbCase):
         b = make_bot()
         b.rpc.create_broadcast.side_effect = Exception("boom")
         bot.newchannel_command(b, 1, make_event('"My Alerts"'))
-        self.assertEqual(database.count_channels_by_owner("1:7"), 0)
+        self.assertEqual(database.count_channels_by_owner(FP_A), 0)
         b.rpc.delete_chat.assert_not_called()
         self.assertIn("Failed", reply_text(b))
 
@@ -279,7 +298,7 @@ class TestNewChannelCommand(DbCase):
         b.rpc.get_chat_securejoin_qr_code.side_effect = Exception("boom")
         bot.newchannel_command(b, 1, make_event('"My Alerts"'))
         b.rpc.delete_chat.assert_called_once_with(1, 42)
-        self.assertEqual(database.count_channels_by_owner("1:7"), 0)
+        self.assertEqual(database.count_channels_by_owner(FP_A), 0)
 
     def test_db_error_deletes_chat(self):
         b = make_bot()
@@ -288,8 +307,33 @@ class TestNewChannelCommand(DbCase):
         b.rpc.delete_chat.assert_called_once_with(1, 42)
         self.assertIn("Failed", reply_text(b))
 
+    def test_no_fingerprint_refused(self):
+        for value in (None, "", f"{FP_A},{FP_B}", "not-a-fingerprint"):
+            with self.subTest(value=value):
+                self.fps[(1, 7)] = value
+                b = make_bot()
+                bot.newchannel_command(b, 1, make_event('"My Alerts"'))
+                b.rpc.create_broadcast.assert_not_called()
+                self.assertIn("Cannot read your key fingerprint", reply_text(b))
+        self.assertEqual(database.count_channels_by_owner("1:7"), 0)
+
+    def test_owner_is_normalised_fingerprint(self):
+        self.fps[(1, 7)] = " " + ":".join(FP_A.lower()[i:i + 4] for i in range(0, 40, 4))
+        b = make_bot()
+        bot.newchannel_command(b, 1, make_event('"My Alerts"'))
+        self.assertEqual(database.count_channels_by_owner(FP_A), 1)
+
+    def test_limit_counts_the_person_across_accounts(self):
+        for i in range(bot.CHANNELS_MAX_PER_USER):
+            database.add_channel(1000 + i, f"t{i}", "T", FP_A, 1, "x")
+        self.fps[(2, 3)] = FP_A  # same person, other account, other contact id
+        b = make_bot()
+        bot.newchannel_command(b, 2, make_event('"One more"', from_id=3))
+        b.rpc.create_broadcast.assert_not_called()
+
     def test_load_bound_per_creation(self):
-        """One creation: at most 4 RPC calls and 4 DB connections, whatever the data size."""
+        """One creation: 4 RPC calls plus one fingerprint read, and 4-5 DB connections,
+        whatever the data size."""
         for i in range(500):  # other users' channels and subscriptions must not add work
             database.add_channel(5000 + i, f"o{i}", "O", str(i + 100), 1, "x")
             database.subscribe(9000 + i, f"s{i}")
@@ -312,23 +356,23 @@ class TestNewChannelCommand(DbCase):
                 b.rpc.create_broadcast.return_value = 100 + i
                 bot._rate_limits.clear()
                 connects.clear()
+                self.get_fp.reset_mock()
                 with patch("database._connect", side_effect=counting_connect):
                     bot.newchannel_command(b, 1, make_event(payload))
                 rpc_calls = [c[0] for c in b.rpc.method_calls]
                 self.assertEqual(b.rpc.create_broadcast.call_count, 1)
                 # chat type check, create_broadcast, invite link, reply
                 self.assertEqual(len(rpc_calls), 4, rpc_calls)
+                # one fingerprint read (get_contact_encryption_info) per command
+                self.assertEqual(self.get_fp.call_count, 1)
                 self.assertEqual(len(connects), expected_connects)
 
 
-class TestChannelManagement(DbCase):
+class TestChannelManagement(FingerprintCase):
     def setUp(self):
         super().setUp()
-        p = patch("bot._is_dc_admin", return_value=False)
-        self.is_admin = p.start()
-        self.addCleanup(p.stop)
-        database.add_channel(42, "mine", "Mine", "1:7", 1, "https://i.delta.chat/#MINE")
-        database.add_channel(43, "theirs", "Theirs", "1:8", 2, "https://i.delta.chat/#THEIRS")
+        database.add_channel(42, "mine", "Mine", FP_A, 1, "https://i.delta.chat/#MINE")
+        database.add_channel(43, "theirs", "Theirs", FP_B, 2, "https://i.delta.chat/#THEIRS")
 
     def test_list_shows_only_own(self):
         b = make_bot()
@@ -370,8 +414,19 @@ class TestChannelManagement(DbCase):
         b.rpc.delete_chat.assert_not_called()
         self.assertEqual(reply_text(b), "❌ Channel not found or not yours.")
 
-    def test_same_contact_id_on_other_account(self):
-        """Contact 7 on account 2 is another person than contact 7 on account 1."""
+    def test_same_person_on_other_account(self):
+        """Same fingerprint, other account and contact id: the same owner."""
+        self.fps[(2, 3)] = FP_A
+        b = make_bot()
+        bot.ntfychannels_command(b, 2, make_event("", from_id=3))
+        self.assertIn("#MINE", reply_text(b))
+        bot.ntfychanneldel_command(b, 2, make_event("mine", from_id=3))
+        self.assertIsNone(database.get_channel_by_topic("mine"))
+        b.rpc.delete_chat.assert_called_once_with(1, 42)  # on the account that created it
+
+    def test_same_contact_id_other_fingerprint_refused(self):
+        """Contact 7 on account 2 is another person (other key) than contact 7 on account 1."""
+        self.fps[(2, 7)] = FP_C
         b = make_bot()
         bot.ntfychannels_command(b, 2, make_event(""))
         self.assertNotIn("#MINE", reply_text(b))
@@ -380,12 +435,46 @@ class TestChannelManagement(DbCase):
         b.rpc.delete_chat.assert_not_called()
         self.assertEqual(reply_text(b), "❌ Channel not found or not yours.")
 
-    def test_owner_key_includes_account(self):
+    def test_owner_key_is_fingerprint(self):
+        self.fps[(3, 5)] = FP_A
         b = make_bot()
         b.rpc.create_broadcast.return_value = 99
-        bot.newchannel_command(b, 3, make_event('"Acc three"'))
-        self.assertEqual(database.count_channels_by_owner("3:7"), 1)
-        self.assertEqual(len(database.get_channels_by_owner("1:7")), 1)  # only "mine"
+        bot.newchannel_command(b, 3, make_event('"Acc three"', from_id=5))
+        self.assertEqual(database.count_channels_by_owner(FP_A), 2)
+        self.assertEqual(database.count_channels_by_owner("3:5"), 0)
+
+    def test_no_fingerprint(self):
+        self.fps[(1, 7)] = None
+        b = make_bot()
+        bot.ntfychannels_command(b, 1, make_event(""))
+        self.assertIn("Cannot read your key fingerprint", reply_text(b))
+        bot.ntfychanneldel_command(b, 1, make_event("mine"))
+        self.assertIsNotNone(database.get_channel_by_topic("mine"))
+        self.assertEqual(reply_text(b), "❌ Channel not found or not yours.")
+
+    def test_admin_without_fingerprint_match_can_delete(self):
+        self.fps[(1, 7)] = None
+        self.is_admin.return_value = True
+        b = make_bot()
+        bot.ntfychanneldel_command(b, 1, make_event("theirs"))
+        self.assertIsNone(database.get_channel_by_topic("theirs"))
+
+    def test_old_format_owner_does_not_crash(self):
+        database.add_channel(44, "legacy", "Legacy", "1:7", 1, "x")
+        b = make_bot()
+        bot.ntfychannels_command(b, 1, make_event(""))
+        self.assertNotIn("legacy", reply_text(b))
+        bot.ntfychanneldel_command(b, 1, make_event("legacy"))
+        self.assertIsNotNone(database.get_channel_by_topic("legacy"))
+        self.assertEqual(reply_text(b), "❌ Channel not found or not yours.")
+
+    def test_fingerprint_read_once_per_list(self):
+        for i in range(5):
+            database.add_channel(60 + i, f"m{i}", "M", FP_A, 1, "x")
+        b = make_bot()
+        self.get_fp.reset_mock()
+        bot.ntfychannels_command(b, 1, make_event(""))
+        self.assertEqual(self.get_fp.call_count, 1)
 
     def test_delete_rate_limited(self):
         b = make_bot()
