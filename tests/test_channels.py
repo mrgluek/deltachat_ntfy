@@ -89,6 +89,24 @@ class TestChannelDatabase(DbCase):
         self.assertEqual(database.get_subscribers("alerts"), [5])
         self.assertIsNone(database.delete_channel("alerts"))
 
+    def test_add_channel_refuses_topic_with_other_subscriber(self):
+        database.subscribe(5, "alerts")  # someone subscribed after the topic check
+        self.assertFalse(database.add_channel(42, "alerts", "Alerts", "1:7", 1, "x"))
+        self.assertIsNone(database.get_channel_by_topic("alerts"))
+        self.assertEqual(database.get_subscribers("alerts"), [5])
+
+    def test_topic_lookups_use_index(self):
+        import sqlite3
+        conn = sqlite3.connect(TEST_DB)
+        try:
+            plan = conn.execute("EXPLAIN QUERY PLAN SELECT EXISTS(SELECT 1 FROM channels WHERE topic = ?) "
+                                "OR EXISTS(SELECT 1 FROM subscriptions WHERE topic = ?)", ("a", "a")).fetchall()
+        finally:
+            conn.close()
+        details = " | ".join(row[-1] for row in plan)
+        self.assertNotIn("SCAN subscriptions", details)
+        self.assertIn("idx_subscriptions_topic", details)
+
     def test_drop_gone_channels_only_touches_channels(self):
         database.add_channel(42, "alerts", "Alerts", "7", 1, "x")
         database.subscribe(5, "alerts")
@@ -106,7 +124,8 @@ class TestParseAndTopic(DbCase):
         self.assertEqual(bot.parse_newchannel_args("'Ops team' ops-1"), ("Ops team", "ops-1"))
 
     def test_parse_bad(self):
-        for payload in ("", "   ", '"unclosed', 'a b c', '""', '"' + "x" * 65 + '"'):
+        for payload in ("", "   ", '"unclosed', 'a b c', '""', '"' + "x" * 65 + '"',
+                        "My Alerts", "alerts topic", '"My\nAlerts"', '"My\tAlerts"', '"Bell\x07"', '"Name" topic\nmore'):
             self.assertIsNone(bot.parse_newchannel_args(payload), payload)
 
     def test_random_topic(self):
@@ -166,13 +185,37 @@ class TestNewChannelCommand(DbCase):
         bot.newchannel_command(b, 1, make_event('"My Alerts"'))
         b.rpc.create_broadcast.assert_called_once_with(1, "My Alerts")
         b.rpc.get_chat_securejoin_qr_code.assert_called_once_with(1, 42)
-        ch = database.get_channels_by_owner("7")[0]
+        ch = database.get_channels_by_owner("1:7")[0]
         self.assertRegex(ch["topic"], r"^[A-Za-z0-9]{12}$")
         self.assertEqual(database.get_subscribers(ch["topic"]), [42])
         text = reply_text(b)
         for part in ("https://i.delta.chat/#INVITE", ch["topic"], f"/send {ch['topic']} **title** message",
                      f"/{ch['topic']}", "password"):
             self.assertIn(part, text)
+
+    def test_name_derived_topic_is_called_public(self):
+        b = make_bot()
+        bot.newchannel_command(b, 1, make_event('alerts'))
+        self.assertEqual(database.get_channel_by_topic("alerts")["chat_id"], 42)
+        text = reply_text(b)
+        self.assertIn("topic is public", text)
+        self.assertNotIn("publish password", text)
+
+    def test_random_or_explicit_topic_is_a_password(self):
+        for i, payload in enumerate(('"My Alerts"', '"My Alerts" secret1', '"alerts" alerts')):
+            b = make_bot()
+            b.rpc.create_broadcast.return_value = 50 + i
+            bot._rate_limits.clear()
+            bot.newchannel_command(b, 1, make_event(payload))
+            text = reply_text(b)
+            self.assertIn("publish password", text, payload)
+            self.assertNotIn("topic is public", text, payload)
+
+    def test_unquoted_two_words_gives_usage(self):
+        b = make_bot()
+        bot.newchannel_command(b, 1, make_event('My Alerts'))
+        b.rpc.create_broadcast.assert_not_called()
+        self.assertIn("Usage", reply_text(b))
 
     def test_create_with_explicit_topic(self):
         b = make_bot()
@@ -200,7 +243,7 @@ class TestNewChannelCommand(DbCase):
 
     def test_limit_per_user(self):
         for i in range(bot.CHANNELS_MAX_PER_USER):
-            database.add_channel(1000 + i, f"t{i}", "T", "7", 1, "x")
+            database.add_channel(1000 + i, f"t{i}", "T", "1:7", 1, "x")
         b = make_bot()
         bot.newchannel_command(b, 1, make_event('"One more"'))
         b.rpc.create_broadcast.assert_not_called()
@@ -208,12 +251,12 @@ class TestNewChannelCommand(DbCase):
 
     def test_admin_has_no_limit(self):
         for i in range(bot.CHANNELS_MAX_PER_USER):
-            database.add_channel(1000 + i, f"t{i}", "T", "7", 1, "x")
+            database.add_channel(1000 + i, f"t{i}", "T", "1:7", 1, "x")
         self.is_admin.return_value = True
         b = make_bot()
         bot.newchannel_command(b, 1, make_event('"One more"'))
         b.rpc.create_broadcast.assert_called_once()
-        self.assertEqual(database.count_channels_by_owner("7"), bot.CHANNELS_MAX_PER_USER + 1)
+        self.assertEqual(database.count_channels_by_owner("1:7"), bot.CHANNELS_MAX_PER_USER + 1)
 
     def test_creation_rate_limited(self):
         b = make_bot()
@@ -227,7 +270,7 @@ class TestNewChannelCommand(DbCase):
         b = make_bot()
         b.rpc.create_broadcast.side_effect = Exception("boom")
         bot.newchannel_command(b, 1, make_event('"My Alerts"'))
-        self.assertEqual(database.count_channels_by_owner("7"), 0)
+        self.assertEqual(database.count_channels_by_owner("1:7"), 0)
         b.rpc.delete_chat.assert_not_called()
         self.assertIn("Failed", reply_text(b))
 
@@ -236,7 +279,7 @@ class TestNewChannelCommand(DbCase):
         b.rpc.get_chat_securejoin_qr_code.side_effect = Exception("boom")
         bot.newchannel_command(b, 1, make_event('"My Alerts"'))
         b.rpc.delete_chat.assert_called_once_with(1, 42)
-        self.assertEqual(database.count_channels_by_owner("7"), 0)
+        self.assertEqual(database.count_channels_by_owner("1:7"), 0)
 
     def test_db_error_deletes_chat(self):
         b = make_bot()
@@ -259,12 +302,23 @@ class TestNewChannelCommand(DbCase):
             connects.append(1)
             return real_connect(*a, **k)
 
-        with patch("database._connect", side_effect=counting_connect):
-            bot.newchannel_command(b, 1, make_event('"My Alerts"'))
-        rpc_calls = [c[0] for c in b.rpc.method_calls]
-        self.assertEqual(b.rpc.create_broadcast.call_count, 1)
-        self.assertLessEqual(len(rpc_calls), 4, rpc_calls)
-        self.assertLessEqual(len(connects), 4)
+        # (payload, DB connections): count, topic check(s), insert, bot_url.
+        # A name that is a taken topic needs one more topic check for the random topic.
+        database.subscribe(8999, "taken")
+        cases = [('"My Alerts"', 4), ('"My Alerts" mytopic', 4), ('free', 4), ('taken', 5)]
+        for i, (payload, expected_connects) in enumerate(cases):
+            with self.subTest(payload=payload):
+                b = make_bot()
+                b.rpc.create_broadcast.return_value = 100 + i
+                bot._rate_limits.clear()
+                connects.clear()
+                with patch("database._connect", side_effect=counting_connect):
+                    bot.newchannel_command(b, 1, make_event(payload))
+                rpc_calls = [c[0] for c in b.rpc.method_calls]
+                self.assertEqual(b.rpc.create_broadcast.call_count, 1)
+                # chat type check, create_broadcast, invite link, reply
+                self.assertEqual(len(rpc_calls), 4, rpc_calls)
+                self.assertEqual(len(connects), expected_connects)
 
 
 class TestChannelManagement(DbCase):
@@ -273,8 +327,8 @@ class TestChannelManagement(DbCase):
         p = patch("bot._is_dc_admin", return_value=False)
         self.is_admin = p.start()
         self.addCleanup(p.stop)
-        database.add_channel(42, "mine", "Mine", "7", 1, "https://i.delta.chat/#MINE")
-        database.add_channel(43, "theirs", "Theirs", "8", 2, "https://i.delta.chat/#THEIRS")
+        database.add_channel(42, "mine", "Mine", "1:7", 1, "https://i.delta.chat/#MINE")
+        database.add_channel(43, "theirs", "Theirs", "1:8", 2, "https://i.delta.chat/#THEIRS")
 
     def test_list_shows_only_own(self):
         b = make_bot()
@@ -314,12 +368,37 @@ class TestChannelManagement(DbCase):
         bot.ntfychanneldel_command(b, 1, make_event("theirs"))
         self.assertIsNotNone(database.get_channel_by_topic("theirs"))
         b.rpc.delete_chat.assert_not_called()
-        self.assertIn("not your channel", reply_text(b))
+        self.assertEqual(reply_text(b), "❌ Channel not found or not yours.")
+
+    def test_same_contact_id_on_other_account(self):
+        """Contact 7 on account 2 is another person than contact 7 on account 1."""
+        b = make_bot()
+        bot.ntfychannels_command(b, 2, make_event(""))
+        self.assertNotIn("#MINE", reply_text(b))
+        bot.ntfychanneldel_command(b, 2, make_event("mine"))
+        self.assertIsNotNone(database.get_channel_by_topic("mine"))
+        b.rpc.delete_chat.assert_not_called()
+        self.assertEqual(reply_text(b), "❌ Channel not found or not yours.")
+
+    def test_owner_key_includes_account(self):
+        b = make_bot()
+        b.rpc.create_broadcast.return_value = 99
+        bot.newchannel_command(b, 3, make_event('"Acc three"'))
+        self.assertEqual(database.count_channels_by_owner("3:7"), 1)
+        self.assertEqual(len(database.get_channels_by_owner("1:7")), 1)  # only "mine"
+
+    def test_delete_rate_limited(self):
+        b = make_bot()
+        for _ in range(10):
+            bot.ntfychanneldel_command(b, 1, make_event("nope"))
+        bot.ntfychanneldel_command(b, 1, make_event("mine"))
+        self.assertIn("Too many", reply_text(b))
+        self.assertIsNotNone(database.get_channel_by_topic("mine"))
 
     def test_delete_unknown_and_usage(self):
         b = make_bot()
         bot.ntfychanneldel_command(b, 1, make_event("nope"))
-        self.assertIn("No channel", reply_text(b))
+        self.assertEqual(reply_text(b), "❌ Channel not found or not yours.")
         bot.ntfychanneldel_command(b, 1, make_event(""))
         self.assertIn("Usage", reply_text(b))
 
@@ -352,7 +431,82 @@ class TestChannelFanOut(DbCase):
     def test_publish_queues_one_message_for_the_channel(self):
         bot._publish_from_chat(MagicMock(), 1, "alerts", "hello", sender_chat_id=100)
         self.assertEqual(self.queue.call_count, 1)
-        self.assertEqual(self.queue.call_args[0][1], 42)
+        acc_id, chat_id, msg_data, _prio, _topic = self.queue.call_args[0]
+        self.assertEqual((acc_id, chat_id), (1, 42))
+        # The topic is the channel's publish password: members must not see it.
+        self.assertIsNone(getattr(msg_data, "override_sender_name", None))
+        self.assertNotIn("alerts", msg_data.text)
+        self.assertIn("hello", msg_data.text)
+
+    def test_http_post_hides_topic_in_channel(self):
+        req = MagicMock(remote="203.0.113.9")
+        req.headers = {"Title": "Disk"}
+        req.query = {}
+        req.match_info = {"topic": "alerts"}
+        req.path = "/alerts"
+        req.read = AsyncMock(return_value=b"hello")
+        with patch.object(bot, "AUTH_TOKEN", None):
+            asyncio.run(bot.handle_ntfy_post(req))
+        msg_data = self.queue.call_args[0][2]
+        self.assertIsNone(getattr(msg_data, "override_sender_name", None))
+        self.assertNotIn("alerts", msg_data.text)
+
+    def test_group_still_gets_topic_sender_name(self):
+        bot.dc_bot_instance.rpc.get_basic_chat_info.return_value = {"chat_type": "Group"}
+        bot._publish_from_chat(MagicMock(), 1, "alerts", "hello", sender_chat_id=100)
+        self.assertEqual(self.queue.call_args[0][2].override_sender_name, "#alerts")
+
+    def test_broadcast_detection_variants(self):
+        for info in ({"chat_type": "OutBroadcast"}, {"chatType": "OutBroadcast"}, {"chat_type": "Broadcast"},
+                     {"type": 160}, SimpleNamespace(chat_type="OutBroadcast"), SimpleNamespace(type=160)):
+            self.assertTrue(bot._is_broadcast_chat(info), info)
+        for info in ({"chat_type": "Group"}, {"chat_type": "Single"}, {"type": 120}, SimpleNamespace(chat_type="Group")):
+            self.assertFalse(bot._is_broadcast_chat(info), info)
+
+    def test_send_error_keeps_live_channel(self):
+        self.queue.side_effect = Exception("Query returned no rows")  # even with the gone wording
+        bot._publish_from_chat(MagicMock(), 1, "alerts", "hello", sender_chat_id=100)
+        self.assertIsNotNone(database.get_channel_by_topic("alerts"))
+        self.assertEqual(database.get_subscribers("alerts"), [42])
+
+    def test_http_send_error_keeps_live_channel(self):
+        self.queue.side_effect = Exception("Query returned no rows")
+        req = MagicMock(remote="203.0.113.9")
+        req.headers = {}
+        req.query = {}
+        req.match_info = {"topic": "alerts"}
+        req.path = "/alerts"
+        req.read = AsyncMock(return_value=b"hello")
+        with patch.object(bot, "AUTH_TOKEN", None), patch("builtins.open", MagicMock()):
+            asyncio.run(bot.handle_ntfy_post(req))
+        self.assertIsNotNone(database.get_channel_by_topic("alerts"))
+
+    def test_account_ids_read_once_per_publication(self):
+        for chat_id in range(200, 260):
+            database.subscribe(chat_id, "alerts")
+        bot._publish_from_chat(MagicMock(), 1, "alerts", "hello", sender_chat_id=100)
+        self.assertEqual(bot.dc_bot_instance.rpc.get_all_account_ids.call_count, 1)
+        self.assertEqual(self.queue.call_count, 61)
+
+    def test_gone_non_channel_chat_causes_no_write(self):
+        database.subscribe(5, "other")
+        bot.dc_bot_instance.rpc.get_basic_chat_info.side_effect = GONE
+        statements = []
+        real_connect = database._connect
+
+        def tracing_connect(*a, **k):
+            conn = real_connect(*a, **k)
+            conn.set_trace_callback(statements.append)
+            return conn
+
+        with patch("database._connect", side_effect=tracing_connect):
+            for _ in range(3):
+                bot._publish_from_chat(MagicMock(), 1, "other", "hello", sender_chat_id=100)
+        touched = [st for st in statements if "channels" in st or "subscriptions" in st]
+        self.assertTrue(any(st.lstrip().upper().startswith("SELECT CHAT_ID FROM CHANNELS") for st in touched))
+        writes = [st for st in touched if st.lstrip().upper().startswith(("DELETE", "INSERT", "UPDATE"))]
+        self.assertEqual(writes, [])
+        self.assertEqual(database.get_subscribers("other"), [5])
 
     def test_gone_channel_is_forgotten(self):
         database.subscribe(5, "alerts")  # a gone private chat: not a channel, left alone

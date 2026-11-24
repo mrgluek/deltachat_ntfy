@@ -79,6 +79,8 @@ def init_db():
                 )
             ''')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_channels_owner ON channels(owner)')
+            # topic lookups (fan-out, topic_in_use) otherwise scan every subscription
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_subscriptions_topic ON subscriptions(topic)')
 
             conn.commit()
         finally:
@@ -170,11 +172,16 @@ def topic_in_use(topic: str) -> bool:
 
 def add_channel(chat_id: int, topic: str, name: str, owner: str, acc_id: int, invite: str) -> bool:
     """Store a channel and subscribe its chat to the topic in one transaction.
-    Returns False (nothing written) if the chat or the topic already has a channel."""
+    Returns False (nothing written) if the chat or the topic already has a channel, or if
+    another chat subscribed to the topic since it was checked."""
     with _lock:
         conn = _connect()
         try:
             cursor = conn.cursor()
+            cursor.execute("SELECT EXISTS(SELECT 1 FROM subscriptions WHERE topic = ? AND dc_chat_id != ?)",
+                           (topic, chat_id))
+            if cursor.fetchone()[0]:
+                return False
             cursor.execute(
                 "INSERT INTO channels (chat_id, topic, name, owner, acc_id, invite) VALUES (?, ?, ?, ?, ?, ?)",
                 (chat_id, topic, name, owner, acc_id, invite))
@@ -233,7 +240,8 @@ def delete_channel(topic: str) -> dict | None:
 
 def drop_gone_channels(chat_ids: list[int]) -> int:
     """Forget channels whose chats no longer exist (one connection for the whole batch).
-    Only chats that are channels are touched; returns the number of channels removed."""
+    Only chats that are channels are touched; a gone chat that is not a channel (an old
+    private subscription) costs one read and no write. Returns the number removed."""
     if not chat_ids:
         return 0
     placeholders = ','.join(['?'] * len(chat_ids))
@@ -241,12 +249,15 @@ def drop_gone_channels(chat_ids: list[int]) -> int:
         conn = _connect()
         try:
             cursor = conn.cursor()
-            cursor.execute(f"DELETE FROM subscriptions WHERE dc_chat_id IN "
-                           f"(SELECT chat_id FROM channels WHERE chat_id IN ({placeholders}))", tuple(chat_ids))
-            cursor.execute(f"DELETE FROM channels WHERE chat_id IN ({placeholders})", tuple(chat_ids))
-            removed = cursor.rowcount
+            cursor.execute(f"SELECT chat_id FROM channels WHERE chat_id IN ({placeholders})", tuple(chat_ids))
+            channel_ids = [row[0] for row in cursor.fetchall()]
+            if not channel_ids:
+                return 0
+            placeholders = ','.join(['?'] * len(channel_ids))
+            cursor.execute(f"DELETE FROM subscriptions WHERE dc_chat_id IN ({placeholders})", tuple(channel_ids))
+            cursor.execute(f"DELETE FROM channels WHERE chat_id IN ({placeholders})", tuple(channel_ids))
             conn.commit()
-            return removed
+            return len(channel_ids)
         finally:
             conn.close()
 

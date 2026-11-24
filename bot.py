@@ -18,6 +18,7 @@ import re
 import secrets
 import shlex
 import string
+import unicodedata
 
 
 import aiohttp
@@ -542,6 +543,20 @@ def valid_topic(topic):
     return isinstance(topic, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", topic) is not None
 
 
+def _is_broadcast_chat(chat_info) -> bool:
+    """A Delta Chat channel (broadcast). Its members must not see the topic, so no "#topic"
+    sender name there. Core 2.x: chatType "OutBroadcast" (older "Broadcast"); legacy type 160."""
+    if isinstance(chat_info, dict):
+        chat_type = chat_info.get("chat_type") or chat_info.get("chatType")
+        type_val = chat_info.get("type")
+    else:
+        chat_type = getattr(chat_info, "chat_type", None) or getattr(chat_info, "chatType", None)
+        type_val = getattr(chat_info, "type", None)
+    if isinstance(chat_type, str) and chat_type.lower() in ("outbroadcast", "broadcast", "inbroadcast"):
+        return True
+    return type_val in (160, "160")
+
+
 def _chat_gone(error) -> bool:
     """The core answers this way for a chat id that does not exist (any more), e.g. a deleted
     channel: "Failed loading chat Chat#N from database: Query returned no rows" (core 2.66)."""
@@ -750,16 +765,17 @@ async def handle_ntfy_post(request):
         # Broadcast to subscribers
         gone_chats = []
         if subscribers and dc_bot_instance and dc_accid is not None:
+            account_ids = dc_bot_instance.rpc.get_all_account_ids()
             for dc_chat_id in subscribers:
                 logger.info(f"Preparing to send topic '{topic}' to chat {dc_chat_id}...")
             
                 success = False
-                account_ids = dc_bot_instance.rpc.get_all_account_ids()
                 gone = bool(account_ids)
                 for acc_id in account_ids:
                     is_private = True
                     try:
                         chat_info = dc_bot_instance.rpc.get_basic_chat_info(acc_id, dc_chat_id)
+                        gone = False  # the chat exists; a later send error must not drop it
                         if isinstance(chat_info, dict):
                             if "chat_type" in chat_info:
                                 is_private = (chat_info["chat_type"] == "Single")
@@ -784,7 +800,7 @@ async def handle_ntfy_post(request):
                             msg_data.file = file_path
                             msg_data.viewtype = attachment_viewtype(file_path)
                     
-                        if not is_private:
+                        if not is_private and not _is_broadcast_chat(chat_info):
                             msg_data.override_sender_name = f"#{topic}"
                     
                         sends.append(queue_notification(acc_id, dc_chat_id, msg_data, send_priority, topic))
@@ -1900,7 +1916,7 @@ async def publish_stats():
                 try:
                     formatted_msg = format_notification(title, message, priority_raw, tags_raw, "", topic, is_private)
                     msg_data = MsgData(text=formatted_msg)
-                    if not is_private:
+                    if not is_private and not _is_broadcast_chat(chat_info):
                         msg_data.override_sender_name = f"#{topic}"
                     queue_notification(acc_id, dc_chat_id, msg_data, PRIO_LOW, topic)
                     success = True
@@ -2549,18 +2565,19 @@ def _publish_from_chat(bot, accid, topic, message, sender_chat_id, title=""):
     subscribers = database.get_subscribers(topic)
     gone_chats = []
     if subscribers and dc_bot_instance and dc_accid is not None:
+        account_ids = dc_bot_instance.rpc.get_all_account_ids()
         for dc_chat_id in subscribers:
             # Skip the sender's chat to avoid echo
             if dc_chat_id == sender_chat_id:
                 continue
 
             success = False
-            account_ids = dc_bot_instance.rpc.get_all_account_ids()
             gone = bool(account_ids)
             for acc_id in account_ids:
                 is_private = True
                 try:
                     chat_info = dc_bot_instance.rpc.get_basic_chat_info(acc_id, dc_chat_id)
+                    gone = False  # the chat exists; a later send error must not drop it
                     if isinstance(chat_info, dict):
                         if "chat_type" in chat_info:
                             is_private = (chat_info["chat_type"] == "Single")
@@ -2578,7 +2595,7 @@ def _publish_from_chat(bot, accid, topic, message, sender_chat_id, title=""):
                 try:
                     formatted_msg = format_notification(title, message, priority_raw, tags_raw, click_raw, topic, is_private)
                     msg_data = MsgData(text=formatted_msg)
-                    if not is_private:
+                    if not is_private and not _is_broadcast_chat(chat_info):
                         msg_data.override_sender_name = f"#{topic}"
                     queue_notification(acc_id, dc_chat_id, msg_data, outbox_priority(priority_int), topic)
                     success = True
@@ -2634,17 +2651,29 @@ CHANNEL_USAGE = 'Usage: /newchannel "Channel name" [topic]'
 
 
 def parse_newchannel_args(payload: str):
-    """`"name" [topic]` or one unquoted word -> (name, topic or None); None if malformed."""
+    """`"name" [topic]` or one unquoted word -> (name, topic or None); None if malformed.
+    An unquoted name must be a single word, so `/newchannel My Alerts` is not read as
+    name "My" with topic "Alerts"."""
+    payload = (payload or "").strip()
+    if any(unicodedata.category(ch) == "Cc" for ch in payload):  # newlines, tabs, other controls
+        return None
     try:
-        args = shlex.split(payload or "")
+        args = shlex.split(payload)
     except ValueError:
         return None
     if not 1 <= len(args) <= 2:
+        return None
+    if len(args) == 2 and payload[0] not in "\"'":
         return None
     name = args[0].strip()
     if not name or len(name) > CHANNEL_NAME_MAX:
         return None
     return name, (args[1] if len(args) == 2 else None)
+
+
+def channel_owner(accid, contact_id) -> str:
+    """Contact ids are per bot account, so the owner key includes the account."""
+    return f"{accid}:{contact_id}"
 
 
 def random_channel_topic() -> str:
@@ -2683,16 +2712,17 @@ def newchannel_command(bot, accid, event):
         return
     name, topic = parsed
 
-    owner = str(msg.from_id)
+    owner = channel_owner(accid, msg.from_id)
     if (database.count_channels_by_owner(owner) >= CHANNELS_MAX_PER_USER
             and not _is_dc_admin(bot, accid, msg.from_id)):
         _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=
             f"❌ You already have {CHANNELS_MAX_PER_USER} channels. Delete one with /ntfychanneldel <topic> first."))
         return
-    if not _hit(f"newchannel:{msg.from_id}", NEWCHANNEL_RATE_MAX):
+    if not _hit(f"newchannel:{owner}", NEWCHANNEL_RATE_MAX):
         _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Too many new channels. Try again in a minute."))
         return
 
+    explicit_topic = topic is not None
     topic, error = choose_channel_topic(name, topic)
     if error:
         _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=error))
@@ -2725,10 +2755,19 @@ def newchannel_command(bot, accid, event):
         f"Topic: `{topic}`\n"
         f"Post from Delta Chat: `/send {topic} **title** message`\n"
         f"Post over HTTP: `curl -d \"message\" {base_url}/{topic}`\n\n"
-        f"🔑 The topic name is the publish password: anyone who knows it can post to the channel "
-        f"and read its history at {base_url}/{topic}. Keep it private.\n"
-        f"Channel members cannot post in the channel itself."
     )
+    if topic == name and not explicit_topic:
+        reply += (
+            f"⚠️ The topic is public: it equals the channel name, so anyone who sees the name can post "
+            f"to the channel and read its history at {base_url}/{topic}. For a private topic, create the "
+            f"channel with a quoted name with spaces (`/newchannel \"My alerts\"`) or an explicit topic.\n"
+        )
+    else:
+        reply += (
+            f"🔑 The topic name is the publish password: anyone who knows it can post to the channel "
+            f"and read its history at {base_url}/{topic}. Keep it private.\n"
+        )
+    reply += "Channel members cannot post in the channel itself."
     _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=reply))
 
 
@@ -2739,7 +2778,7 @@ def ntfychannels_command(bot, accid, event):
     if not _is_private_chat(bot, accid, msg.chat_id):
         _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ /ntfychannels only works in a private chat with the bot."))
         return
-    channels = database.get_channels_by_owner(str(msg.from_id))
+    channels = database.get_channels_by_owner(channel_owner(accid, msg.from_id))
     if not channels:
         _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text='You have no channels. Create one with /newchannel "name" [topic].'))
         return
@@ -2757,12 +2796,14 @@ def ntfychanneldel_command(bot, accid, event):
     if not valid_topic(topic):
         _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="Usage: /ntfychanneldel <topic>"))
         return
-    channel = database.get_channel_by_topic(topic)
-    if not channel:
-        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"❌ No channel with topic `{topic}`."))
+    if not _hit(f"ntfychanneldel:{channel_owner(accid, msg.from_id)}", 10):
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Too many requests. Try again in a minute."))
         return
-    if channel["owner"] != str(msg.from_id) and not _is_dc_admin(bot, accid, msg.from_id):
-        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ This is not your channel."))
+    channel = database.get_channel_by_topic(topic)
+    # Same reply for a missing topic and someone else's channel: no probing which topics exist.
+    if not channel or (channel["owner"] != channel_owner(accid, msg.from_id)
+                       and not _is_dc_admin(bot, accid, msg.from_id)):
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Channel not found or not yours."))
         return
     database.delete_channel(topic)
     try:

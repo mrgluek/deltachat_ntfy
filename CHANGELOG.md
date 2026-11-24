@@ -8,10 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.7.0] - 2026-11-24
 
 ### Added
-- `/newchannel "name" [topic]` creates a Delta Chat channel (broadcast) subscribed to a topic and replies with its join link, the topic and how to post to it (`/send` or HTTP POST). Without a topic the bot uses the name if it is a free valid topic, else a random 12-character topic (letters and digits, from `secrets`). Private chat only; up to `CHANNELS_MAX_PER_USER` (default 10) channels per user, the admin has no limit; at most 3 creations per user per minute. A failed creation leaves no database row and deletes the half-created chat.
-- `/ntfychannels` lists your own channels (name, topic, join link); `/ntfychanneldel <topic>` deletes a channel, allowed for its creator and the admin.
+- `/newchannel "name" [topic]` creates a Delta Chat channel (broadcast) subscribed to a topic and replies with its join link, the topic and how to post to it (`/send` or HTTP POST). Without a topic the bot uses the name if it is a free valid topic (the reply then warns that the topic is public, because it equals the channel name), else a random 12-character topic (letters and digits, from `secrets`). A name with spaces must be quoted: an unquoted name of more than one word, or a name with control characters or line breaks, gets the usage text. Private chat only; up to `CHANNELS_MAX_PER_USER` (default 10) channels per user, the admin has no limit; at most 3 creations per user per minute. A failed creation leaves no database row and deletes the half-created chat.
+- `/ntfychannels` lists your own channels (name, topic, join link); `/ntfychanneldel <topic>` deletes a channel, allowed for its creator and the admin; a missing topic and someone else's channel get the same reply, and the command is limited to 10 per user per minute. Channel ownership is tied to the bot account the user talked to.
 - New `channels` table (chat, topic, name, owner, account, invite link). A channel is one more subscriber of its topic, so publishing adds no new work. The invite link is stored at creation, so `/ntfychannels` makes no RPC call per channel.
-- A channel whose chat no longer exists (the core answers "Query returned no rows") is forgotten on the next publication to its topic, in one batched database call.
+- A channel whose chat no longer exists (the core answers "Query returned no rows") is forgotten on the next publication to its topic, in one batched database call. A chat that was found but failed to send is never treated as gone; a gone chat that is not a channel costs one read and no write.
+- Notifications in a channel do not show the topic: no `#topic` sender name and no `[topic]` prefix in the text, because the topic is the channel's publish password. Groups still get the `#topic` sender name.
+
+### Changed
+- Index `idx_subscriptions_topic` on `subscriptions(topic)`, so topic lookups during publishing and channel creation no longer scan all subscriptions.
+- Publishing reads the account list once per publication instead of once per subscriber.
 
 ### Removed
 - `/newgroup`. Use `/newchannel` instead.
