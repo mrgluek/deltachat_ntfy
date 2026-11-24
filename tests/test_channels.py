@@ -173,6 +173,9 @@ def reply_text(b):
     return b.rpc.send_msg.call_args[0][2].text
 
 
+MD_NAME = "**x** [a](http://e.test)"
+MD_ESCAPED = "\\*\\*x\\*\\* \\[a\\]\\(http://e.test\\)"
+
 FP_A = "AB12" * 10   # contact 7 (on account 1), and the same person elsewhere
 FP_B = "CD34" * 10   # contact 8
 FP_C = "EF56" * 10   # contact 9
@@ -221,7 +224,7 @@ class TestNewChannelCommand(FingerprintCase):
         self.assertNotIn("publish password", text)
 
     def test_random_or_explicit_topic_is_a_password(self):
-        for i, payload in enumerate(('"My Alerts"', '"My Alerts" secret1', '"alerts" alerts')):
+        for i, payload in enumerate(('"My Alerts"', '"My Alerts" secret1')):
             b = make_bot()
             b.rpc.create_broadcast.return_value = 50 + i
             bot._rate_limits.clear()
@@ -229,6 +232,21 @@ class TestNewChannelCommand(FingerprintCase):
             text = reply_text(b)
             self.assertIn("publish password", text, payload)
             self.assertNotIn("topic is public", text, payload)
+
+    def test_explicit_topic_equal_to_name_is_called_public(self):
+        b = make_bot()
+        bot.newchannel_command(b, 1, make_event('"alerts" alerts'))
+        self.assertEqual(database.get_channel_by_topic("alerts")["chat_id"], 42)
+        text = reply_text(b)
+        self.assertIn("topic is public", text)
+        self.assertNotIn("publish password", text)
+
+    def test_name_is_escaped_in_creation_reply(self):
+        b = make_bot()
+        bot.newchannel_command(b, 1, make_event('"' + MD_NAME + '"'))
+        text = reply_text(b)
+        self.assertIn(MD_ESCAPED, text)
+        self.assertNotIn(MD_NAME, text)
 
     def test_unquoted_two_words_gives_usage(self):
         b = make_bot()
@@ -468,6 +486,23 @@ class TestChannelManagement(FingerprintCase):
         self.assertIsNotNone(database.get_channel_by_topic("legacy"))
         self.assertEqual(reply_text(b), "❌ Channel not found or not yours.")
 
+    def test_name_is_escaped_in_list_and_delete(self):
+        database.add_channel(70, "mdname", MD_NAME, FP_A, 1, "x")
+        b = make_bot()
+        bot.ntfychannels_command(b, 1, make_event(""))
+        self.assertIn(MD_ESCAPED, reply_text(b))
+        self.assertNotIn(MD_NAME, reply_text(b))
+        b = make_bot()
+        b.rpc.send_reaction.side_effect = Exception("no reactions")  # the text reply is the fallback
+        bot.ntfychanneldel_command(b, 1, make_event("mdname"))
+        self.assertIsNone(database.get_channel_by_topic("mdname"))
+        self.assertIn(MD_ESCAPED, reply_text(b))
+        self.assertNotIn(MD_NAME, reply_text(b))
+
+    def test_md_escape(self):
+        self.assertEqual(bot.md_escape("a\\b*_`[]()#>~|c"), "a\\\\b\\*\\_\\`\\[\\]\\(\\)\\#\\>\\~\\|c")
+        self.assertEqual(bot.md_escape("Plain name 1"), "Plain name 1")
+
     def test_fingerprint_read_once_per_list(self):
         for i in range(5):
             database.add_channel(60 + i, f"m{i}", "M", FP_A, 1, "x")
@@ -621,6 +656,109 @@ class TestChannelFanOut(DbCase):
             resp = asyncio.run(bot.handle_ntfy_post(req))
         self.assertEqual(resp.status, 200)
         self.assertIsNone(database.get_channel_by_topic("alerts"))
+
+
+
+BROADCAST_FORMS = [{"chatType": "OutBroadcast"}, {"chat_type": "OutBroadcast"},
+                   SimpleNamespace(chat_type="OutBroadcast"), {"type": 160}]
+SINGLE_FORMS = [{"chatType": "Single"}, {"chat_type": "Single"}, SimpleNamespace(chat_type="Single"), {"type": 1}]
+GROUP_FORMS = [{"chatType": "Group"}, {"chat_type": "Group"}, SimpleNamespace(chat_type="Group"), {"type": 120}]
+
+
+class TestChatKindInPublishers(DbCase):
+    """The queued message for each chat kind, in every chat-info form, from all three publishers."""
+
+    def setUp(self):
+        super().setUp()
+        self.saved = (bot.dc_bot_instance, bot.dc_accid)
+        bot.dc_bot_instance = MagicMock()
+        bot.dc_bot_instance.rpc.get_all_account_ids.return_value = [1]
+        bot.dc_accid = 1
+        p = patch("bot.queue_notification")
+        self.queue = p.start()
+        self.addCleanup(p.stop)
+        database.subscribe(5, "alerts")
+        database.subscribe(5, "stats")
+
+    def tearDown(self):
+        bot.dc_bot_instance, bot.dc_accid = self.saved
+        super().tearDown()
+
+    def _publish_chat(self):
+        bot._publish_from_chat(MagicMock(), 1, "alerts", "hello", sender_chat_id=100)
+        return "alerts"
+
+    def _publish_http(self):
+        req = MagicMock(remote="203.0.113.9")
+        req.headers = {}
+        req.query = {}
+        req.match_info = {"topic": "alerts"}
+        req.path = "/alerts"
+        req.read = AsyncMock(return_value=b"hello")
+        with patch.object(bot, "AUTH_TOKEN", None):
+            asyncio.run(bot.handle_ntfy_post(req))
+        return "alerts"
+
+    def _publish_stats(self):
+        asyncio.run(bot.publish_stats())
+        return "stats"
+
+    def _queued(self, info, publish):
+        bot._rate_limits.clear()
+        self.queue.reset_mock()
+        bot.dc_bot_instance.rpc.get_basic_chat_info.return_value = info
+        topic = publish()
+        self.assertEqual(self.queue.call_count, 1)
+        acc_id, chat_id, msg_data, _prio, queued_topic = self.queue.call_args[0]
+        self.assertEqual((acc_id, chat_id, queued_topic), (1, 5, topic))
+        return topic, msg_data
+
+    def _each(self):
+        for publish in (self._publish_chat, self._publish_http, self._publish_stats):
+            yield publish
+
+    def test_broadcast_has_no_prefix_and_no_sender_name(self):
+        for publish in self._each():
+            for info in BROADCAST_FORMS:
+                with self.subTest(publisher=publish.__name__, info=info):
+                    topic, msg_data = self._queued(info, publish)
+                    self.assertNotIn(f"[{topic}]", msg_data.text)
+                    self.assertIsNone(getattr(msg_data, "override_sender_name", None))
+
+    def test_single_gets_topic_prefix(self):
+        for publish in self._each():
+            for info in SINGLE_FORMS + [{}]:  # unknown type: treated as 1:1, as before
+                with self.subTest(publisher=publish.__name__, info=info):
+                    topic, msg_data = self._queued(info, publish)
+                    self.assertTrue(msg_data.text.startswith(f"`[{topic}]`"), msg_data.text)
+                    self.assertIsNone(getattr(msg_data, "override_sender_name", None))
+
+    def test_group_gets_topic_sender_name(self):
+        for publish in self._each():
+            for info in GROUP_FORMS:
+                with self.subTest(publisher=publish.__name__, info=info):
+                    topic, msg_data = self._queued(info, publish)
+                    self.assertNotIn(f"[{topic}]", msg_data.text)
+                    self.assertEqual(msg_data.override_sender_name, f"#{topic}")
+
+
+class TestChatKind(unittest.TestCase):
+    def test_kinds(self):
+        for info in BROADCAST_FORMS + [{"chat_type": "Broadcast"}, {"chatType": "InBroadcast"}, {"type": "160"}]:
+            self.assertEqual(bot.chat_kind(info), "broadcast", info)
+        for info in SINGLE_FORMS + [{"type": 100}]:
+            self.assertEqual(bot.chat_kind(info), "single", info)
+        for info in GROUP_FORMS + [{"chat_type": "Mailinglist"}]:
+            self.assertEqual(bot.chat_kind(info), "group", info)
+        for info in ({}, {"type": "x"}, SimpleNamespace(), {"chat_type": "Weird"}, None):
+            self.assertEqual(bot.chat_kind(info), "unknown", info)
+
+    def test_is_private_chat_parser_unchanged_for_unknown(self):
+        self.assertTrue(bot._parse_chat_info_is_private({"chatType": "Single"}))
+        self.assertTrue(bot._parse_chat_info_is_private(SimpleNamespace(chat_type="Single")))
+        self.assertFalse(bot._parse_chat_info_is_private({"chatType": "OutBroadcast"}))
+        self.assertFalse(bot._parse_chat_info_is_private({"chat_type": "Group"}))
+        self.assertFalse(bot._parse_chat_info_is_private({}))
 
 
 if __name__ == "__main__":

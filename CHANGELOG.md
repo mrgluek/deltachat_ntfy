@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.2] - 2026-11-24
+
+### Fixed
+- Channels never show their topic in notifications, whatever form the chat info comes in. Before, a chat info with only the camelCase `chatType` (the raw core answer) and no numeric `type` was taken for a 1:1 chat, so a channel would have got the `[topic]` prefix. One parser (`chat_kind`) now reads `chatType`, `chat_type` (dict or object) and the legacy numeric `type`, and is used by HTTP publishing, `/send` and quote replies, the daily stats and `_is_private_chat`. 1:1 chats keep the `[topic]` prefix and groups keep the `#topic` sender name; an unknown type is still treated as 1:1 by the publishers and as not private by `_is_private_chat`. The daily stats now also give groups the `#topic` sender name instead of the 1:1 prefix.
+- The `/newchannel` reply warns that the topic is public whenever the topic equals the channel name, also when it was given explicitly (`/newchannel "alerts" alerts`); the "publish password" note is shown only when they differ.
+- Channel names are Markdown-escaped in the `/newchannel`, `/ntfychannels` and `/ntfychanneldel` replies, so a name cannot add formatting or links to the bot's text.
+
 ## [1.7.1] - 2026-11-24
 
 ### Changed

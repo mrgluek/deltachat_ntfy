@@ -42,7 +42,7 @@ import collections
 # Initialize logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("ntfy_bot")
-VERSION = "1.7.1"
+VERSION = "1.7.2"
 # Attachments over 64 KB are not downloaded automatically. Not 1 byte: the core then also defers
 # every plain text message (commands, links) to a one-by-one "download later", which delays replies.
 DOWNLOAD_LIMIT = 65536
@@ -543,18 +543,47 @@ def valid_topic(topic):
     return isinstance(topic, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", topic) is not None
 
 
-def _is_broadcast_chat(chat_info) -> bool:
-    """A Delta Chat channel (broadcast). Its members must not see the topic, so no "#topic"
-    sender name there. Core 2.x: chatType "OutBroadcast" (older "Broadcast"); legacy type 160."""
+_CHAT_KIND_BY_NAME = {"single": "single", "group": "group", "mailinglist": "group",
+                      "outbroadcast": "broadcast", "broadcast": "broadcast", "inbroadcast": "broadcast"}
+# Legacy numeric types: 1 is what this bot always treated as a 1:1 chat; 100/120/140/160 are
+# the core's DC_CHAT_TYPE_SINGLE/GROUP/MAILINGLIST/BROADCAST.
+_CHAT_KIND_BY_NUMBER = {1: "single", 100: "single", 120: "group", 140: "group", 160: "broadcast"}
+
+
+def chat_kind(chat_info) -> str:
+    """"single", "group", "broadcast" or "unknown" for a chat info in any form: the raw core
+    answer (camelCase `chatType`), the deltachat2 AttrDict/object (`chat_type`) or a legacy
+    numeric `type`. Callers decide what "unknown" means, as before."""
     if isinstance(chat_info, dict):
-        chat_type = chat_info.get("chat_type") or chat_info.get("chatType")
-        type_val = chat_info.get("type")
+        get = chat_info.get
     else:
-        chat_type = getattr(chat_info, "chat_type", None) or getattr(chat_info, "chatType", None)
-        type_val = getattr(chat_info, "type", None)
-    if isinstance(chat_type, str) and chat_type.lower() in ("outbroadcast", "broadcast", "inbroadcast"):
-        return True
-    return type_val in (160, "160")
+        def get(key):
+            return getattr(chat_info, key, None)
+    chat_type = get("chat_type") or get("chatType")
+    if isinstance(chat_type, str) and chat_type.lower() in _CHAT_KIND_BY_NAME:
+        return _CHAT_KIND_BY_NAME[chat_type.lower()]
+    type_val = get("type")
+    try:
+        return _CHAT_KIND_BY_NUMBER.get(int(type_val), "unknown")
+    except (TypeError, ValueError):
+        return "unknown"
+
+
+def _is_broadcast_chat(chat_info) -> bool:
+    """A Delta Chat channel: no "[topic]" prefix and no "#topic" sender name there."""
+    return chat_kind(chat_info) == "broadcast"
+
+
+def notification_style(chat_info) -> tuple[bool, bool]:
+    """(is_private, topic_sender_name) for a subscriber chat. 1:1 chats get the "[topic]"
+    prefix, groups the "#topic" sender name, channels neither (the topic is their publish
+    password). An unknown or missing type is treated as 1:1, as the publishers always did."""
+    kind = chat_kind(chat_info)
+    if kind == "broadcast":
+        return False, False
+    if kind == "group":
+        return False, True
+    return True, False
 
 
 def _chat_gone(error) -> bool:
@@ -772,20 +801,10 @@ async def handle_ntfy_post(request):
                 success = False
                 gone = bool(account_ids)
                 for acc_id in account_ids:
-                    is_private = True
                     try:
                         chat_info = dc_bot_instance.rpc.get_basic_chat_info(acc_id, dc_chat_id)
                         gone = False  # the chat exists; a later send error must not drop it
-                        if isinstance(chat_info, dict):
-                            if "chat_type" in chat_info:
-                                is_private = (chat_info["chat_type"] == "Single")
-                            else:
-                                is_private = (chat_info.get("type", 1) == 1)
-                        else:
-                            if hasattr(chat_info, "chat_type"):
-                                is_private = (chat_info.chat_type == "Single")
-                            else:
-                                is_private = (getattr(chat_info, "type", 1) == 1)
+                        is_private, topic_sender = notification_style(chat_info)
                         logger.info(f"Chat {dc_chat_id} found on account {acc_id}, is_private: {is_private}")
                     except Exception as e:
                         # This exception means the chat doesn't exist on this account, try next account
@@ -800,7 +819,7 @@ async def handle_ntfy_post(request):
                             msg_data.file = file_path
                             msg_data.viewtype = attachment_viewtype(file_path)
                     
-                        if not is_private and not _is_broadcast_chat(chat_info):
+                        if topic_sender:
                             msg_data.override_sender_name = f"#{topic}"
                     
                         sends.append(queue_notification(acc_id, dc_chat_id, msg_data, send_priority, topic))
@@ -1903,20 +1922,16 @@ async def publish_stats():
         for dc_chat_id in subscribers:
             success = False
             for acc_id in dc_bot_instance.rpc.get_all_account_ids():
-                is_private = True
                 try:
                     chat_info = dc_bot_instance.rpc.get_basic_chat_info(acc_id, dc_chat_id)
-                    if isinstance(chat_info, dict):
-                        is_private = (chat_info.get("chat_type", "") == "Single" or chat_info.get("type", 1) == 1)
-                    else:
-                        is_private = (getattr(chat_info, "chat_type", "") == "Single" or getattr(chat_info, "type", 1) == 1)
+                    is_private, topic_sender = notification_style(chat_info)
                 except Exception:
                     continue
 
                 try:
                     formatted_msg = format_notification(title, message, priority_raw, tags_raw, "", topic, is_private)
                     msg_data = MsgData(text=formatted_msg)
-                    if not is_private and not _is_broadcast_chat(chat_info):
+                    if topic_sender:
                         msg_data.override_sender_name = f"#{topic}"
                     queue_notification(acc_id, dc_chat_id, msg_data, PRIO_LOW, topic)
                     success = True
@@ -2241,21 +2256,8 @@ def _get_contact_fingerprint(bot, accid, contact_id, contact=None):
     return dc_fingerprint.get_contact_fingerprint(bot.rpc, accid, contact_id)
 
 def _parse_chat_info_is_private(chat_info) -> bool:
-    if isinstance(chat_info, dict):
-        chat_type = chat_info.get("chatType") or chat_info.get("chat_type")
-        if isinstance(chat_type, str) and chat_type.lower() == "single":
-            return True
-        type_val = chat_info.get("type")
-        if type_val in (1, "1"):
-            return True
-    else:
-        chat_type = getattr(chat_info, "chat_type", None) or getattr(chat_info, "chatType", None)
-        if isinstance(chat_type, str) and chat_type.lower() == "single":
-            return True
-        type_val = getattr(chat_info, "type", None)
-        if type_val in (1, "1"):
-            return True
-    return False
+    """Only a known 1:1 chat counts as private here (unknown -> False, as before)."""
+    return chat_kind(chat_info) == "single"
 
 def _is_private_chat(bot, accid, chat_id) -> bool:
     # 1. Try get_basic_chat_info
@@ -2574,20 +2576,10 @@ def _publish_from_chat(bot, accid, topic, message, sender_chat_id, title=""):
             success = False
             gone = bool(account_ids)
             for acc_id in account_ids:
-                is_private = True
                 try:
                     chat_info = dc_bot_instance.rpc.get_basic_chat_info(acc_id, dc_chat_id)
                     gone = False  # the chat exists; a later send error must not drop it
-                    if isinstance(chat_info, dict):
-                        if "chat_type" in chat_info:
-                            is_private = (chat_info["chat_type"] == "Single")
-                        else:
-                            is_private = (chat_info.get("type", 1) == 1)
-                    else:
-                        if hasattr(chat_info, "chat_type"):
-                            is_private = (chat_info.chat_type == "Single")
-                        else:
-                            is_private = (getattr(chat_info, "type", 1) == 1)
+                    is_private, topic_sender = notification_style(chat_info)
                 except Exception as e:
                     gone = gone and _chat_gone(e)
                     continue
@@ -2595,7 +2587,7 @@ def _publish_from_chat(bot, accid, topic, message, sender_chat_id, title=""):
                 try:
                     formatted_msg = format_notification(title, message, priority_raw, tags_raw, click_raw, topic, is_private)
                     msg_data = MsgData(text=formatted_msg)
-                    if not is_private and not _is_broadcast_chat(chat_info):
+                    if topic_sender:
                         msg_data.override_sender_name = f"#{topic}"
                     queue_notification(acc_id, dc_chat_id, msg_data, outbox_priority(priority_int), topic)
                     success = True
@@ -2687,6 +2679,14 @@ def channel_owner(bot, accid, contact_id) -> str | None:
     return fp
 
 
+_MARKDOWN_SPECIAL = re.compile(r"([\\*_`\[\]()#>~|])")
+
+
+def md_escape(text: str) -> str:
+    """Backslash-escape Markdown-significant characters in user text put into a bot reply."""
+    return _MARKDOWN_SPECIAL.sub(r"\\\1", str(text))
+
+
 def random_channel_topic() -> str:
     """12 random letters and digits, like the ids of dchannels previews (e.g. twniAE9eNajd)."""
     return "".join(secrets.choice(CHANNEL_TOPIC_ALPHABET) for _ in range(12))
@@ -2736,7 +2736,6 @@ def newchannel_command(bot, accid, event):
         _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Too many new channels. Try again in a minute."))
         return
 
-    explicit_topic = topic is not None
     topic, error = choose_channel_topic(name, topic)
     if error:
         _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=error))
@@ -2764,13 +2763,13 @@ def newchannel_command(bot, accid, event):
 
     base_url = (database.get_config("bot_url") or "https://ntfy.gluek.info").rstrip('/')
     reply = (
-        f"✅ Channel '{name}' created.\n\n"
+        f"✅ Channel '{md_escape(name)}' created.\n\n"
         f"Join link: {invite}\n\n"
         f"Topic: `{topic}`\n"
         f"Post from Delta Chat: `/send {topic} **title** message`\n"
         f"Post over HTTP: `curl -d \"message\" {base_url}/{topic}`\n\n"
     )
-    if topic == name and not explicit_topic:
+    if topic == name:  # from the name or given explicitly: anyone who sees the name knows it
         reply += (
             f"⚠️ The topic is public: it equals the channel name, so anyone who sees the name can post "
             f"to the channel and read its history at {base_url}/{topic}. For a private topic, create the "
@@ -2802,7 +2801,7 @@ def ntfychannels_command(bot, accid, event):
         return
     lines = [f"📣 **Your channels** ({len(channels)}/{CHANNELS_MAX_PER_USER})"]
     for ch in channels:
-        lines.append(f"\n• {ch['name']} — `{ch['topic']}`\n  {ch['invite']}")
+        lines.append(f"\n• {md_escape(ch['name'])} — `{ch['topic']}`\n  {ch['invite']}")
     _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="\n".join(lines)))
 
 
@@ -2831,7 +2830,7 @@ def ntfychanneldel_command(bot, accid, event):
         bot.rpc.delete_chat(channel["acc_id"] if channel["acc_id"] is not None else accid, channel["chat_id"])
     except Exception as e:
         bot.logger.warning(f"Channel {channel['chat_id']} removed from the database, but deleting the chat failed: {e}")
-    react_or_reply(bot, accid, msg, "🗑️", topic, f"✅ Channel '{channel['name']}' (`{topic}`) deleted.")
+    react_or_reply(bot, accid, msg, "🗑️", topic, f"✅ Channel '{md_escape(channel['name'])}' (`{topic}`) deleted.")
 
 @dc_cli.on(events.NewMessage(command="/donate"))
 def donate_command(bot, accid, event):
