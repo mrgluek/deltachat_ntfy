@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.1] - 2026-11-24
+
+### Changed
+- The owner of a channel is now stored by the user's key fingerprint instead of the bot account and contact id, so the same person owns their channels on every bot account and a different key never does. The per-user limit, `/ntfychannels`, `/ntfychanneldel` (the admin can still delete any channel) and the rate limits use the fingerprint. If the bot cannot read a single key fingerprint for the sender, `/newchannel` and `/ntfychannels` reply "Cannot read your key fingerprint, write to me once more in a private chat". v1.7.0 was never deployed, so there is no migration; an old-format owner value simply never matches.
+
 ## [1.7.0] - 2026-11-24
 
 ### Added
