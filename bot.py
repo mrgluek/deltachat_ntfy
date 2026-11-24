@@ -15,6 +15,9 @@ import html
 from html import escape as html_escape
 import hmac
 import re
+import secrets
+import shlex
+import string
 
 
 import aiohttp
@@ -38,7 +41,7 @@ import collections
 # Initialize logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("ntfy_bot")
-VERSION = "1.6.9"
+VERSION = "1.7.0"
 # Attachments over 64 KB are not downloaded automatically. Not 1 byte: the core then also defers
 # every plain text message (commands, links) to a one-by-one "download later", which delays replies.
 DOWNLOAD_LIMIT = 65536
@@ -60,6 +63,9 @@ AUTH_TOKEN = os.getenv("AUTH_TOKEN")
 RATE_LIMIT_WINDOW = 60 # seconds
 RATE_LIMIT_MAX = int(os.getenv("RATE_LIMIT_MAX", "30")) # messages per minute per IP
 TOPIC_RATE_MAX = int(os.getenv("TOPIC_RATE_MAX", "60"))
+CHANNELS_MAX_PER_USER = int(os.getenv("CHANNELS_MAX_PER_USER", "10"))  # admin: unlimited
+NEWCHANNEL_RATE_MAX = 3  # /newchannel attempts per user per minute
+CHANNEL_NAME_MAX = 64
 URGENT_PER_TOPIC_PER_MIN = 5
 TEMP_ATTACH_BUDGET = 200 * 1024 * 1024
 _temp_attach_used = 0
@@ -536,6 +542,25 @@ def valid_topic(topic):
     return isinstance(topic, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", topic) is not None
 
 
+def _chat_gone(error) -> bool:
+    """The core answers this way for a chat id that does not exist (any more), e.g. a deleted
+    channel: "Failed loading chat Chat#N from database: Query returned no rows" (core 2.66)."""
+    return "Query returned no rows" in str(error)
+
+
+def _forget_gone_channels(chat_ids):
+    """Called once per publication with the chats that were missing on every account.
+    Removes them only if they are channels (one DB connection for the batch)."""
+    if not chat_ids:
+        return
+    try:
+        removed = database.drop_gone_channels(chat_ids)
+        if removed:
+            logger.warning(f"Removed {removed} channel(s) whose chat no longer exists: {chat_ids}")
+    except Exception as e:
+        logger.error(f"Could not remove gone channels {chat_ids}: {e}")
+
+
 async def handle_ntfy_post(request):
     topic = request.match_info.get('topic')
     
@@ -723,12 +748,15 @@ async def handle_ntfy_post(request):
         push_to_listeners(topic, msg_payload)
 
         # Broadcast to subscribers
+        gone_chats = []
         if subscribers and dc_bot_instance and dc_accid is not None:
             for dc_chat_id in subscribers:
                 logger.info(f"Preparing to send topic '{topic}' to chat {dc_chat_id}...")
             
                 success = False
-                for acc_id in dc_bot_instance.rpc.get_all_account_ids():
+                account_ids = dc_bot_instance.rpc.get_all_account_ids()
+                gone = bool(account_ids)
+                for acc_id in account_ids:
                     is_private = True
                     try:
                         chat_info = dc_bot_instance.rpc.get_basic_chat_info(acc_id, dc_chat_id)
@@ -745,6 +773,7 @@ async def handle_ntfy_post(request):
                         logger.info(f"Chat {dc_chat_id} found on account {acc_id}, is_private: {is_private}")
                     except Exception as e:
                         # This exception means the chat doesn't exist on this account, try next account
+                        gone = gone and _chat_gone(e)
                         continue
 
                     try:
@@ -772,7 +801,9 @@ async def handle_ntfy_post(request):
 
                 if not success:
                     logger.warning(f"Could not find chat {dc_chat_id} on any configured account.")
-
+                    if gone:
+                        gone_chats.append(dc_chat_id)
+            _forget_gone_channels(gone_chats)
 
         return web.json_response({"id": "ntfy-compat", "time": int(time.time()), "event": "message", "topic": topic, "message": message})
     except AttachmentBudgetFull:
@@ -2292,7 +2323,9 @@ def get_help_text(bot, accid, from_id):
         f"/list — Show subscribed topics\n"
         f"/last — Show last 5 notifications\n"
         f"/stats — Show bot statistics\n"
-        f"/newgroup [name] — Create a dedicated group chat\n"
+        f"/newchannel \"name\" [topic] — Create a channel that receives a topic\n"
+        f"/ntfychannels — List your channels\n"
+        f"/ntfychanneldel <topic> — Delete your channel\n"
         f"/donate — Support bot development ❤️\n"
         f"/help — Show this help message\n\n"
         f"💡 _You can also reply to any notification to post back to its topic._\n\n"
@@ -2514,6 +2547,7 @@ def _publish_from_chat(bot, accid, topic, message, sender_chat_id, title=""):
 
     # Broadcast to all subscribers
     subscribers = database.get_subscribers(topic)
+    gone_chats = []
     if subscribers and dc_bot_instance and dc_accid is not None:
         for dc_chat_id in subscribers:
             # Skip the sender's chat to avoid echo
@@ -2521,7 +2555,9 @@ def _publish_from_chat(bot, accid, topic, message, sender_chat_id, title=""):
                 continue
 
             success = False
-            for acc_id in dc_bot_instance.rpc.get_all_account_ids():
+            account_ids = dc_bot_instance.rpc.get_all_account_ids()
+            gone = bool(account_ids)
+            for acc_id in account_ids:
                 is_private = True
                 try:
                     chat_info = dc_bot_instance.rpc.get_basic_chat_info(acc_id, dc_chat_id)
@@ -2535,7 +2571,8 @@ def _publish_from_chat(bot, accid, topic, message, sender_chat_id, title=""):
                             is_private = (chat_info.chat_type == "Single")
                         else:
                             is_private = (getattr(chat_info, "type", 1) == 1)
-                except Exception:
+                except Exception as e:
+                    gone = gone and _chat_gone(e)
                     continue
 
                 try:
@@ -2552,6 +2589,9 @@ def _publish_from_chat(bot, accid, topic, message, sender_chat_id, title=""):
 
             if not success:
                 logger.warning(f"_publish_from_chat: could not find chat {dc_chat_id} on any account.")
+                if gone:
+                    gone_chats.append(dc_chat_id)
+        _forget_gone_channels(gone_chats)
 
 
 @dc_cli.on(events.NewMessage(command="/send"))
@@ -2589,25 +2629,147 @@ def send_command(bot, accid, event):
         confirm_sent(bot, accid, msg, topic, f"title: {title}" if title else "")
 
 
-@dc_cli.on(events.NewMessage(command="/newgroup"))
-def newgroup_command(bot, accid, event):
-    msg = event.msg
-    group_name = event.payload.strip() or "Ntfy Alerts"
-    
+CHANNEL_TOPIC_ALPHABET = string.ascii_letters + string.digits
+CHANNEL_USAGE = 'Usage: /newchannel "Channel name" [topic]'
+
+
+def parse_newchannel_args(payload: str):
+    """`"name" [topic]` or one unquoted word -> (name, topic or None); None if malformed."""
     try:
-        # Create a new group chat
-        new_chat_id = bot.rpc.create_group_chat(accid, group_name, False)
-        # Get secure join link
-        qrdata = bot.rpc.get_chat_securejoin_qr_code(accid, new_chat_id)
-        
-        reply_text = (
-            f"✅ Group '{group_name}' created!\n\n"
-            f"Join link: {qrdata}"
-        )
-        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=reply_text))
+        args = shlex.split(payload or "")
+    except ValueError:
+        return None
+    if not 1 <= len(args) <= 2:
+        return None
+    name = args[0].strip()
+    if not name or len(name) > CHANNEL_NAME_MAX:
+        return None
+    return name, (args[1] if len(args) == 2 else None)
+
+
+def random_channel_topic() -> str:
+    """12 random letters and digits, like the ids of dchannels previews (e.g. twniAE9eNajd)."""
+    return "".join(secrets.choice(CHANNEL_TOPIC_ALPHABET) for _ in range(12))
+
+
+def choose_channel_topic(name: str, topic: str | None):
+    """(topic, error). An explicit topic must be valid and free; else the name if it is a free
+    valid topic; else a random one. Free = no channel and no subscribers."""
+    if topic is not None:
+        if not valid_topic(topic):
+            return None, "❌ Invalid topic name (1–64 letters, digits, _, . or -)"
+        if database.topic_in_use(topic):
+            return None, f"❌ Topic `{topic}` is already in use. Pick another one or leave it out for a random topic."
+        return topic, None
+    if valid_topic(name) and not database.topic_in_use(name):
+        return name, None
+    for _ in range(5):
+        candidate = random_channel_topic()
+        if not database.topic_in_use(candidate):
+            return candidate, None
+    return None, "❌ Could not pick a free topic. Try again."
+
+
+@dc_cli.on(events.NewMessage(command="/newchannel"))
+def newchannel_command(bot, accid, event):
+    """Create a Delta Chat channel (broadcast) that receives a topic's notifications."""
+    msg = event.msg
+    if not _is_private_chat(bot, accid, msg.chat_id):
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ /newchannel only works in a private chat with the bot."))
+        return
+    parsed = parse_newchannel_args(event.payload)
+    if not parsed:
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=CHANNEL_USAGE))
+        return
+    name, topic = parsed
+
+    owner = str(msg.from_id)
+    if (database.count_channels_by_owner(owner) >= CHANNELS_MAX_PER_USER
+            and not _is_dc_admin(bot, accid, msg.from_id)):
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=
+            f"❌ You already have {CHANNELS_MAX_PER_USER} channels. Delete one with /ntfychanneldel <topic> first."))
+        return
+    if not _hit(f"newchannel:{msg.from_id}", NEWCHANNEL_RATE_MAX):
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Too many new channels. Try again in a minute."))
+        return
+
+    topic, error = choose_channel_topic(name, topic)
+    if error:
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=error))
+        return
+
+    try:
+        chat_id = bot.rpc.create_broadcast(accid, name)
     except Exception as e:
-        bot.logger.error(f"Failed to create group: {e}")
-        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"❌ Failed to create group: {e}"))
+        bot.logger.error(f"Failed to create channel: {e}")
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Failed to create the channel. Try again later."))
+        return
+    try:
+        invite = bot.rpc.get_chat_securejoin_qr_code(accid, chat_id)
+        stored = database.add_channel(chat_id, topic, name, owner, accid, invite)
+    except Exception as e:
+        bot.logger.error(f"Failed to set up channel {chat_id}: {e}")
+        stored = False
+    if not stored:
+        try:
+            bot.rpc.delete_chat(accid, chat_id)
+        except Exception as e:
+            bot.logger.error(f"Failed to delete half-created channel {chat_id}: {e}")
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ Failed to create the channel. Try again later."))
+        return
+
+    base_url = (database.get_config("bot_url") or "https://ntfy.gluek.info").rstrip('/')
+    reply = (
+        f"✅ Channel '{name}' created.\n\n"
+        f"Join link: {invite}\n\n"
+        f"Topic: `{topic}`\n"
+        f"Post from Delta Chat: `/send {topic} **title** message`\n"
+        f"Post over HTTP: `curl -d \"message\" {base_url}/{topic}`\n\n"
+        f"🔑 The topic name is the publish password: anyone who knows it can post to the channel "
+        f"and read its history at {base_url}/{topic}. Keep it private.\n"
+        f"Channel members cannot post in the channel itself."
+    )
+    _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=reply))
+
+
+@dc_cli.on(events.NewMessage(command="/ntfychannels"))
+def ntfychannels_command(bot, accid, event):
+    """List the caller's own channels (name, topic, join link)."""
+    msg = event.msg
+    if not _is_private_chat(bot, accid, msg.chat_id):
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ /ntfychannels only works in a private chat with the bot."))
+        return
+    channels = database.get_channels_by_owner(str(msg.from_id))
+    if not channels:
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text='You have no channels. Create one with /newchannel "name" [topic].'))
+        return
+    lines = [f"📣 **Your channels** ({len(channels)}/{CHANNELS_MAX_PER_USER})"]
+    for ch in channels:
+        lines.append(f"\n• {ch['name']} — `{ch['topic']}`\n  {ch['invite']}")
+    _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="\n".join(lines)))
+
+
+@dc_cli.on(events.NewMessage(command="/ntfychanneldel"))
+def ntfychanneldel_command(bot, accid, event):
+    """Delete a channel: its owner or the administrator."""
+    msg = event.msg
+    topic = event.payload.strip()
+    if not valid_topic(topic):
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="Usage: /ntfychanneldel <topic>"))
+        return
+    channel = database.get_channel_by_topic(topic)
+    if not channel:
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text=f"❌ No channel with topic `{topic}`."))
+        return
+    if channel["owner"] != str(msg.from_id) and not _is_dc_admin(bot, accid, msg.from_id):
+        _dc_send_msg_with_stats(bot, accid, msg.chat_id, MsgData(text="❌ This is not your channel."))
+        return
+    database.delete_channel(topic)
+    try:
+        bot.rpc.delete_chat(channel["acc_id"] if channel["acc_id"] is not None else accid, channel["chat_id"])
+    except Exception as e:
+        bot.logger.warning(f"Channel {channel['chat_id']} removed from the database, but deleting the chat failed: {e}")
+    react_or_reply(bot, accid, msg, "🗑️", topic, f"✅ Channel '{channel['name']}' (`{topic}`) deleted.")
 
 @dc_cli.on(events.NewMessage(command="/donate"))
 def donate_command(bot, accid, event):

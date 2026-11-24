@@ -16,6 +16,9 @@ Start the bot. Add it to Delta Chat. Message the bot:
 - `/unsub mytopic` to unsubscribe
 - `/list` to list your subscribed topics
 - `/last` to see the last 5 notifications from your subscribed topics
+- `/newchannel "Channel name" [topic]` to create a Delta Chat channel that receives a topic (private chat only)
+- `/ntfychannels` to list your channels with their topics and join links (private chat only)
+- `/ntfychanneldel <topic>` to delete a channel (its creator or the admin)
 - `/stats` to see the number of notifications received in the last 24 hours
 - `/transports` to show mail relays: relay used for sending, send queue, incoming status and storage (admin only)
 - `/addtransport` to add a backup mail relay (admin only)
@@ -82,6 +85,7 @@ The bot supports the following `ntfy` Priority values:
   - **Direct Upload**: Use `curl -T file.jpg -H 'Filename: file.jpg'` to upload a file directly as the message body.
 - **Any Text Encoding 🔤**: Message bodies (plain text and JSON) and the Title/Tags headers are accepted in any encoding. The bot uses the `charset` from `Content-Type` if given, otherwise tries UTF-8 and then Windows-1251 (what Windows PowerShell 5.1 `Invoke-RestMethod` sends without a charset); undecodable bytes become `�` instead of failing the request.
 - **Paced Sending (relay send limit) 🚦**: chatmail relays accept 60 messages a minute per sender (burst 10) and answer `450 Too much mail` above that, after which everything is late for minutes. A notification goes to every chat subscribed to its topic, so bursts multiply. All messages go through one queue (`outbox.py`): at most 50 a minute with bursts of 5, sent by priority - notifications with `Priority` 4-5 first, then command replies, then priority 3 (default), then 1-2 and the daily stats; same priority in arrival order, so a topic's notifications keep their order. Nothing is dropped. The HTTP request returns as soon as the notification is queued; attachments are kept until their last send. A backlog of 20+ messages is logged once a minute.
+- **Channels 📣**: `/newchannel "Server alerts"` creates a Delta Chat channel (a read-only broadcast chat) and subscribes it to a topic, so everyone who joins through the invite link gets the topic's notifications. Give the topic as a second argument (`/newchannel "Server alerts" srv-alerts`); without it the bot uses the name if it is a valid, unused topic, else a random 12-character topic such as `twniAE9eNajd`. An explicit topic that already has a channel or subscribers is refused. The reply has the join link, the topic, and how to post (`/send <topic> **title** message` or an HTTP POST to `<bot url>/<topic>`). **The topic name works as the publish password**: anyone who knows it can post to the channel and read its history on the topic web page, so keep it private. Channel members cannot post in the channel itself; to reply to a channel's notifications, `/sub <topic>` in a private chat or group and reply there. Each user can have up to `CHANNELS_MAX_PER_USER` channels (the admin has no limit). `/ntfychannels` lists your own channels; `/ntfychanneldel <topic>` deletes one (the creator or the admin). If a channel's chat no longer exists, the bot forgets the channel the next time it publishes to its topic.
 - **Group Support 👥**: Add the bot to any group and use `/sub <topic>` inside the group. The bot will appear to send messages on behalf of the topic (e.g., as `#topic`) using the `override_sender_name` feature. Reply to a notification (in a private chat or a group) to post your reply back to its topic; the bot confirms with a reaction ("📋 topic") on your message instead of a separate reply (`/send` too). `/sub` and `/unsub` also answer with a reaction ("✅ topic", "🔕 topic", "ℹ️ topic" if nothing changed); if a reaction cannot be sent, the bot replies with text.
 
 ### Testing Examples
@@ -163,6 +167,7 @@ You can also manage transports directly in Delta Chat using `/addtransport` and 
 | `TRUSTED_PROXIES` | Peers allowed to supply `X-Forwarded-For`; walk the chain from the right to the first untrusted IP | `127.0.0.0/8,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16` |
 | `RATE_LIMIT_MAX` | HTTP publications per client IP per minute | `30` |
 | `TOPIC_RATE_MAX` | Publications per topic per minute, shared by HTTP, `/send` and quote replies | `60` |
+| `CHANNELS_MAX_PER_USER` | Channels one user can create with `/newchannel` (the admin has no limit); also at most 3 `/newchannel` per user per minute | `10` |
 | `MAX_STREAMS_PER_IP` | Open JSON streams per client IP | `10` |
 | `MAX_STREAMS_TOTAL` | Open JSON streams across all clients | `500` |
 | `OUTBOX_MAX_QUEUED` | Waiting notification jobs; HTTP fan-out exceeding this backlog returns 503 | `300` |

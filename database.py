@@ -64,7 +64,22 @@ def init_db():
                     last_received_at INTEGER
                 )
             ''')
-            
+
+            # Delta Chat channels (broadcasts) created by /newchannel; each one is also
+            # an ordinary subscriber of its topic in `subscriptions`.
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS channels (
+                    chat_id INTEGER PRIMARY KEY,
+                    topic TEXT UNIQUE NOT NULL,
+                    name TEXT,
+                    owner TEXT,
+                    acc_id INTEGER,
+                    invite TEXT,
+                    created_at INTEGER DEFAULT (strftime('%s','now'))
+                )
+            ''')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_channels_owner ON channels(owner)')
+
             conn.commit()
         finally:
             conn.close()
@@ -138,6 +153,100 @@ def get_subscribers(topic: str) -> list[int]:
             cursor.execute("SELECT dc_chat_id FROM subscriptions WHERE topic = ?", (topic,))
             rows = cursor.fetchall()
             return [row[0] for row in rows]
+        finally:
+            conn.close()
+
+def topic_in_use(topic: str) -> bool:
+    """True if the topic has a channel or any subscriber (one query)."""
+    with _lock:
+        conn = _connect()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("SELECT EXISTS(SELECT 1 FROM channels WHERE topic = ?) "
+                           "OR EXISTS(SELECT 1 FROM subscriptions WHERE topic = ?)", (topic, topic))
+            return bool(cursor.fetchone()[0])
+        finally:
+            conn.close()
+
+def add_channel(chat_id: int, topic: str, name: str, owner: str, acc_id: int, invite: str) -> bool:
+    """Store a channel and subscribe its chat to the topic in one transaction.
+    Returns False (nothing written) if the chat or the topic already has a channel."""
+    with _lock:
+        conn = _connect()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT INTO channels (chat_id, topic, name, owner, acc_id, invite) VALUES (?, ?, ?, ?, ?, ?)",
+                (chat_id, topic, name, owner, acc_id, invite))
+            cursor.execute("INSERT OR IGNORE INTO subscriptions (dc_chat_id, topic) VALUES (?, ?)", (chat_id, topic))
+            conn.commit()
+            return True
+        except sqlite3.IntegrityError:
+            conn.rollback()
+            return False
+        finally:
+            conn.close()
+
+def get_channel_by_topic(topic: str) -> dict | None:
+    with _lock:
+        conn = _connect()
+        try:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute("SELECT * FROM channels WHERE topic = ?", (topic,)).fetchone()
+            return dict(row) if row else None
+        finally:
+            conn.close()
+
+def get_channels_by_owner(owner: str) -> list[dict]:
+    with _lock:
+        conn = _connect()
+        try:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute("SELECT * FROM channels WHERE owner = ? ORDER BY created_at, chat_id", (owner,)).fetchall()
+            return [dict(r) for r in rows]
+        finally:
+            conn.close()
+
+def count_channels_by_owner(owner: str) -> int:
+    with _lock:
+        conn = _connect()
+        try:
+            return conn.execute("SELECT COUNT(*) FROM channels WHERE owner = ?", (owner,)).fetchone()[0]
+        finally:
+            conn.close()
+
+def delete_channel(topic: str) -> dict | None:
+    """Delete a channel row and its chat's subscription to the topic. Returns the deleted row or None."""
+    with _lock:
+        conn = _connect()
+        try:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute("SELECT * FROM channels WHERE topic = ?", (topic,)).fetchone()
+            if not row:
+                return None
+            conn.execute("DELETE FROM subscriptions WHERE dc_chat_id = ? AND topic = ?", (row["chat_id"], topic))
+            conn.execute("DELETE FROM channels WHERE chat_id = ?", (row["chat_id"],))
+            conn.commit()
+            return dict(row)
+        finally:
+            conn.close()
+
+def drop_gone_channels(chat_ids: list[int]) -> int:
+    """Forget channels whose chats no longer exist (one connection for the whole batch).
+    Only chats that are channels are touched; returns the number of channels removed."""
+    if not chat_ids:
+        return 0
+    placeholders = ','.join(['?'] * len(chat_ids))
+    with _lock:
+        conn = _connect()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(f"DELETE FROM subscriptions WHERE dc_chat_id IN "
+                           f"(SELECT chat_id FROM channels WHERE chat_id IN ({placeholders}))", tuple(chat_ids))
+            cursor.execute(f"DELETE FROM channels WHERE chat_id IN ({placeholders})", tuple(chat_ids))
+            removed = cursor.rowcount
+            conn.commit()
+            return removed
         finally:
             conn.close()
 

@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.0] - 2026-11-24
+
+### Added
+- `/newchannel "name" [topic]` creates a Delta Chat channel (broadcast) subscribed to a topic and replies with its join link, the topic and how to post to it (`/send` or HTTP POST). Without a topic the bot uses the name if it is a free valid topic, else a random 12-character topic (letters and digits, from `secrets`). Private chat only; up to `CHANNELS_MAX_PER_USER` (default 10) channels per user, the admin has no limit; at most 3 creations per user per minute. A failed creation leaves no database row and deletes the half-created chat.
+- `/ntfychannels` lists your own channels (name, topic, join link); `/ntfychanneldel <topic>` deletes a channel, allowed for its creator and the admin.
+- New `channels` table (chat, topic, name, owner, account, invite link). A channel is one more subscriber of its topic, so publishing adds no new work. The invite link is stored at creation, so `/ntfychannels` makes no RPC call per channel.
+- A channel whose chat no longer exists (the core answers "Query returned no rows") is forgotten on the next publication to its topic, in one batched database call.
+
+### Removed
+- `/newgroup`. Use `/newchannel` instead.
+
 ## [1.6.9] - 2026-11-23
 
 ### Fixed
